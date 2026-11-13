@@ -45,6 +45,9 @@ impl GuardConfig {
     }
 }
 
+/// CSP for responses that set none: nothing may load, nothing may frame.
+pub const DEFAULT_CSP: &str = "default-src 'none'; frame-ancestors 'none'";
+
 /// Middleware: rejects unexpected hosts and cross-origin writes, and adds
 /// baseline headers to every response.
 pub async fn guard(State(cfg): State<Arc<GuardConfig>>, req: Request, next: Next) -> Response {
@@ -81,6 +84,10 @@ pub async fn guard(State(cfg): State<Arc<GuardConfig>>, req: Request, next: Next
         .or_insert(HeaderValue::from_static("nosniff"));
     h.entry(header::X_FRAME_OPTIONS)
         .or_insert(HeaderValue::from_static("DENY"));
+    // Locks down anything without its own policy (JSON, static assets).
+    // index.html and file streams set their own.
+    h.entry(header::CONTENT_SECURITY_POLICY)
+        .or_insert(HeaderValue::from_static(DEFAULT_CSP));
     resp
 }
 
@@ -444,5 +451,22 @@ mod tests {
         let resp = app.oneshot(req("GET", "localhost", None)).await.unwrap();
         assert_eq!(resp.headers()["x-content-type-options"], "nosniff");
         assert_eq!(resp.headers()["x-frame-options"], "DENY");
+        assert_eq!(resp.headers()["content-security-policy"], DEFAULT_CSP);
+    }
+
+    #[tokio::test]
+    async fn guard_keeps_handler_csp() {
+        let app = Router::new()
+            .route(
+                "/",
+                get(|| async { ([(header::CONTENT_SECURITY_POLICY, "sandbox")], "ok") }),
+            )
+            .layer(middleware::from_fn_with_state(
+                Arc::new(GuardConfig::default()),
+                guard,
+            ));
+        let resp = app.oneshot(req("GET", "localhost", None)).await.unwrap();
+        assert_eq!(resp.headers()["content-security-policy"], "sandbox");
+        assert_eq!(resp.headers()["x-content-type-options"], "nosniff");
     }
 }

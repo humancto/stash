@@ -1,0 +1,515 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-13T08:21:09+00:00",
+  "title": "Design System: stash",
+  "extensions": {
+    "colorMeta": {
+      "ground": {
+        "role": "neutral",
+        "displayName": "Booth Wall",
+        "canonical": "#14110f",
+        "tonalRamp": [
+          "#0c0b0a",
+          "#262524",
+          "#444140",
+          "#64605e",
+          "#85817f",
+          "#a8a4a2",
+          "#cbc8c7",
+          "#f0eeed"
+        ]
+      },
+      "panel": {
+        "role": "neutral",
+        "displayName": "Panel",
+        "canonical": "#1b1714",
+        "tonalRamp": [
+          "#0c0b0a",
+          "#262523",
+          "#44413f",
+          "#64605d",
+          "#86817d",
+          "#a8a4a1",
+          "#ccc8c6",
+          "#f0eeec"
+        ]
+      },
+      "raised": {
+        "role": "neutral",
+        "displayName": "Raised",
+        "canonical": "#241f1a",
+        "tonalRamp": [
+          "#0c0b0a",
+          "#272522",
+          "#45413e",
+          "#65605b",
+          "#87817b",
+          "#a9a49f",
+          "#ccc8c4",
+          "#f1eeeb"
+        ]
+      },
+      "hair": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#3a312a",
+        "tonalRamp": [
+          "#0d0b09",
+          "#282421",
+          "#47413c",
+          "#685f59",
+          "#8b8078",
+          "#aca39c",
+          "#cfc8c2",
+          "#f2edea"
+        ]
+      },
+      "hair-strong": {
+        "role": "neutral",
+        "displayName": "Strong Hairline",
+        "canonical": "#4d4238",
+        "tonalRamp": [
+          "#0d0b09",
+          "#292420",
+          "#47413a",
+          "#695f57",
+          "#8c8075",
+          "#ada39a",
+          "#d0c7c0",
+          "#f3ede8"
+        ]
+      },
+      "hair-hover": {
+        "role": "neutral",
+        "displayName": "Hover Seam",
+        "canonical": "#5e5045",
+        "tonalRamp": [
+          "#0d0b09",
+          "#292420",
+          "#494039",
+          "#6b5f55",
+          "#8e7f73",
+          "#afa299",
+          "#d1c7bf",
+          "#f4ede7"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Print",
+        "canonical": "#f3ece0",
+        "tonalRamp": [
+          "#0c0b09",
+          "#272521",
+          "#45413b",
+          "#656158",
+          "#888177",
+          "#aaa49b",
+          "#cdc9c1",
+          "#f1eee9"
+        ]
+      },
+      "text-2": {
+        "role": "neutral",
+        "displayName": "Faded Print",
+        "canonical": "#bcb09f",
+        "tonalRamp": [
+          "#0d0b08",
+          "#28241f",
+          "#474138",
+          "#696053",
+          "#8c8171",
+          "#ada496",
+          "#cfc8bd",
+          "#f3eee6"
+        ]
+      },
+      "text-3": {
+        "role": "neutral",
+        "displayName": "Dim Print",
+        "canonical": "#968a7a",
+        "tonalRamp": [
+          "#0d0b08",
+          "#29241f",
+          "#474138",
+          "#696053",
+          "#8c8071",
+          "#ada396",
+          "#d0c8be",
+          "#f3eee6"
+        ]
+      },
+      "amber": {
+        "role": "primary",
+        "displayName": "Tungsten Amber",
+        "canonical": "#f0a33a",
+        "tonalRamp": [
+          "#150800",
+          "#381e00",
+          "#603700",
+          "#8b5200",
+          "#b86f00",
+          "#d3974c",
+          "#efc089",
+          "#ffe8c3"
+        ]
+      },
+      "amber-hover": {
+        "role": "primary",
+        "displayName": "Warm Filament",
+        "canonical": "#f6b65c",
+        "tonalRamp": [
+          "#130900",
+          "#352000",
+          "#5c3a00",
+          "#855600",
+          "#b07403",
+          "#cc9b57",
+          "#e9c290",
+          "#ffeac7"
+        ]
+      },
+      "amber-ink": {
+        "role": "primary",
+        "displayName": "Burnt Ink",
+        "canonical": "#1f1406",
+        "tonalRamp": [
+          "#0d0b08",
+          "#29241e",
+          "#494137",
+          "#6a5f52",
+          "#8e806f",
+          "#afa395",
+          "#d1c7bc",
+          "#f4ede5"
+        ]
+      },
+      "ready": {
+        "role": "tertiary",
+        "displayName": "Ready Sage",
+        "canonical": "#a9c79f",
+        "tonalRamp": [
+          "#080d07",
+          "#1e281b",
+          "#374732",
+          "#53694b",
+          "#708c67",
+          "#96ad8e",
+          "#bdd0b7",
+          "#e6f3e2"
+        ]
+      },
+      "danger": {
+        "role": "tertiary",
+        "displayName": "Signal Coral",
+        "canonical": "#ec7a6c",
+        "tonalRamp": [
+          "#180504",
+          "#3f1713",
+          "#6a2c25",
+          "#994339",
+          "#c95c50",
+          "#e4887c",
+          "#fdb4a9",
+          "#ffe0d8"
+        ]
+      },
+      "danger-ground": {
+        "role": "tertiary",
+        "displayName": "Ember Ground",
+        "canonical": "#3a1d18",
+        "tonalRamp": [
+          "#100908",
+          "#2e211f",
+          "#513c39",
+          "#765954",
+          "#9c7872",
+          "#bb9d97",
+          "#dbc3be",
+          "#fbeae7"
+        ]
+      },
+      "danger-text": {
+        "role": "tertiary",
+        "displayName": "Blush Text",
+        "canonical": "#ffd9d3",
+        "tonalRamp": [
+          "#0f0909",
+          "#2e2220",
+          "#503d3a",
+          "#745a56",
+          "#9b7974",
+          "#ba9d99",
+          "#dac3c0",
+          "#fbeae8"
+        ]
+      }
+    },
+    "runtimeColors": [
+      {
+        "name": "screen",
+        "value": "rgb(150 96 52)",
+        "purpose": "Registered <color> property; average colour of the playing frame, sampled every 500ms (2s reduced motion). Drives room wash, rail-edge glow and screen spill."
+      },
+      {
+        "name": "sw",
+        "value": "hsl(12-49 42% 26-39%)",
+        "purpose": "Stable per-filename warm swatch for file-row frames until real thumbnails exist."
+      }
+    ],
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Page titles and the film title on Watch."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Empty-state headings."
+      },
+      "wordmark": {
+        "displayName": "Wordmark",
+        "purpose": "The stash wordmark and screen-note heading."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Default text; row titles at 550, transfer names at 600."
+      },
+      "body-sm": {
+        "displayName": "Body Small",
+        "purpose": "Buttons, inputs, tabs, cells, status."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Meta lines, counts, notes, kbd hint."
+      }
+    },
+    "shadows": [
+      {
+        "name": "pressed-tab",
+        "value": "0 1px 2px rgb(0 0 0 / 0.35)",
+        "purpose": "Selected segment in a segmented control."
+      },
+      {
+        "name": "film-frame",
+        "value": "0 2px 6px rgb(0 0 0 / 0.45)",
+        "purpose": "The 16:9 swatch in a file row."
+      },
+      {
+        "name": "screen-spill",
+        "value": "0 0 0 1px color-mix(in srgb, var(--screen) 28%, var(--hair)), 0 30px 90px -20px color-mix(in srgb, var(--screen) 55%, transparent), 0 0 160px 10px color-mix(in srgb, var(--screen) 22%, transparent)",
+        "purpose": "The player only: the film lighting the room."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Every transition."
+      },
+      {
+        "name": "state",
+        "value": "160ms",
+        "purpose": "Button, input and nav hover/press (rows 140ms)."
+      },
+      {
+        "name": "reel-fill",
+        "value": "700ms",
+        "purpose": "Reel stroke-dashoffset."
+      },
+      {
+        "name": "room-wash",
+        "value": "900ms",
+        "purpose": "Wash opacity 0.55 to 1 when Watch opens."
+      },
+      {
+        "name": "screen-hue",
+        "value": "1.6s",
+        "purpose": "--screen colour change."
+      },
+      {
+        "name": "breathe",
+        "value": "1.6s ease-in-out infinite",
+        "purpose": "Skeleton opacity pulse to 0.55."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "0ms",
+        "purpose": "All transitions and animations off under prefers-reduced-motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "phone",
+        "value": "max-width: 640px"
+      },
+      {
+        "name": "tablet",
+        "value": "max-width: 1023px"
+      },
+      {
+        "name": "narrow-desktop",
+        "value": "max-width: 1180px"
+      },
+      {
+        "name": "tv",
+        "value": "min-width: 1800px"
+      }
+    ],
+    "layout": [
+      {
+        "name": "rail-w",
+        "value": "224px (76px at <=1023px)"
+      },
+      {
+        "name": "top-h",
+        "value": "64px"
+      },
+      {
+        "name": "tv-column",
+        "value": "1520px"
+      },
+      {
+        "name": "actions-rail",
+        "value": "300px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The amber lamp: one per region (Add in the top bar, Play/Pause on the actions rail).",
+      "html": "<button class=\"ds-btn-primary\"><svg viewBox=\"0 0 24 24\" width=\"18\" height=\"18\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M5 12h14\"/><path d=\"M12 5v14\"/></svg>Add</button>",
+      "css": ".ds-btn-primary{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;padding:0 16px;border:1px solid var(--hair-strong);border-radius:var(--r-md);background:var(--raised);color:var(--text);font:500 0.875rem/1 var(--font);white-space:nowrap;cursor:pointer;transition:background 160ms var(--ease-out),border-color 160ms var(--ease-out),color 160ms var(--ease-out)} .ds-btn-primary svg{width:18px;height:18px;flex:none} .ds-btn-primary:focus-visible{outline:2px solid var(--amber);outline-offset:2px} .ds-btn-primary{background:var(--amber);border-color:var(--amber);color:var(--amber-ink);font-weight:650} .ds-btn-primary:hover{background:var(--amber-hover);border-color:var(--amber-hover)}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Default action button on the raised surface, e.g. Download, Copy stream link.",
+      "html": "<button class=\"ds-btn-secondary\"><svg viewBox=\"0 0 24 24\" width=\"18\" height=\"18\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 17V3\"/><path d=\"m6 11 6 6 6-6\"/><path d=\"M19 21H5\"/></svg>Download<span class=\"ds-extra\"> · 263.3 MB</span></button>",
+      "css": ".ds-btn-secondary{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;padding:0 16px;border:1px solid var(--hair-strong);border-radius:var(--r-md);background:var(--raised);color:var(--text);font:500 0.875rem/1 var(--font);white-space:nowrap;cursor:pointer;transition:background 160ms var(--ease-out),border-color 160ms var(--ease-out),color 160ms var(--ease-out)} .ds-btn-secondary svg{width:18px;height:18px;flex:none} .ds-btn-secondary:focus-visible{outline:2px solid var(--amber);outline-offset:2px} .ds-btn-secondary:hover{background:#2e2720;border-color:#5e5045} .ds-btn-secondary:active{background:#352d25} .ds-extra{color:var(--text-2);font-variant-numeric:tabular-nums}"
+    },
+    {
+      "name": "Quiet Button",
+      "kind": "button",
+      "refersTo": "button-quiet",
+      "description": "Low-emphasis navigation action, e.g. Go to transfer.",
+      "html": "<button class=\"ds-btn-quiet\"><svg viewBox=\"0 0 24 24\" width=\"18\" height=\"18\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 17V3\"/><path d=\"m6 11 6 6 6-6\"/><path d=\"M19 21H5\"/></svg>Go to transfer</button>",
+      "css": ".ds-btn-quiet{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;padding:0 16px;border:1px solid var(--hair-strong);border-radius:var(--r-md);background:var(--raised);color:var(--text);font:500 0.875rem/1 var(--font);white-space:nowrap;cursor:pointer;transition:background 160ms var(--ease-out),border-color 160ms var(--ease-out),color 160ms var(--ease-out)} .ds-btn-quiet svg{width:18px;height:18px;flex:none} .ds-btn-quiet:focus-visible{outline:2px solid var(--amber);outline-offset:2px} .ds-btn-quiet{background:transparent;border-color:transparent;color:var(--text-2)} .ds-btn-quiet:hover{background:var(--raised);color:var(--text)}"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Destructive action, isolated at the foot of the actions rail.",
+      "html": "<button class=\"ds-btn-danger\">Delete transfer</button>",
+      "css": ".ds-btn-danger{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;padding:0 16px;border:1px solid var(--hair-strong);border-radius:var(--r-md);background:var(--raised);color:var(--text);font:500 0.875rem/1 var(--font);white-space:nowrap;cursor:pointer;transition:background 160ms var(--ease-out),border-color 160ms var(--ease-out),color 160ms var(--ease-out)} .ds-btn-danger svg{width:18px;height:18px;flex:none} .ds-btn-danger:focus-visible{outline:2px solid var(--amber);outline-offset:2px} .ds-btn-danger{background:transparent;border-color:color-mix(in srgb,var(--danger) 45%,transparent);color:var(--danger)} .ds-btn-danger:hover,.ds-btn-danger:focus-visible{background:var(--danger-ground);border-color:var(--danger)}"
+    },
+    {
+      "name": "Search Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Top-bar search with leading icon and the / shortcut hint.",
+      "html": "<div class=\"ds-search\"><svg viewBox=\"0 0 24 24\" width=\"18\" height=\"18\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m21 21-4.34-4.34\"/><circle cx=\"11\" cy=\"11\" r=\"8\"/></svg><input class=\"ds-input\" type=\"search\" placeholder=\"Search files\"><kbd class=\"ds-kbd\">/</kbd></div>",
+      "css": ".ds-search{position:relative;max-width:520px;font-family:var(--font)} .ds-search svg{position:absolute;left:12px;top:50%;translate:0 -50%;color:var(--text-3);pointer-events:none} .ds-input{width:100%;min-height:40px;padding:0 44px 0 40px;border:1px solid var(--hair-strong);border-radius:var(--r-md);background:var(--panel);color:var(--text);font:inherit;font-size:0.875rem;caret-color:var(--amber);transition:border-color 160ms var(--ease-out),background 160ms var(--ease-out)} .ds-input::placeholder{color:var(--text-3)} .ds-input:hover{border-color:#5e5045} .ds-input:focus-visible{outline:none;border-color:var(--amber);background:var(--raised)} .ds-kbd{position:absolute;right:10px;top:50%;translate:0 -50%;padding:1px 7px;border:1px solid var(--hair-strong);border-radius:5px;color:var(--text-3);font-size:0.8125rem;line-height:1.4}"
+    },
+    {
+      "name": "Rail Navigation",
+      "kind": "nav",
+      "refersTo": "nav-link",
+      "description": "Rail links; current page takes the raised fill, the live count is the amber pill.",
+      "html": "<nav class=\"ds-rail\"><a class=\"ds-nav-link\" aria-current=\"page\" href=\"#\"><svg viewBox=\"0 0 24 24\" width=\"18\" height=\"18\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3z\"/><path d=\"m6.18 5.276 3.1 3.899\"/><path d=\"m12.296 3.464 3.02 3.956\"/><path d=\"M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z\"/></svg><span>Files</span></a><a class=\"ds-nav-link\" href=\"#\"><svg viewBox=\"0 0 24 24\" width=\"18\" height=\"18\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 17V3\"/><path d=\"m6 11 6 6 6-6\"/><path d=\"M19 21H5\"/></svg><span>Transfers</span><span class=\"ds-nav-count\">2</span></a></nav>",
+      "css": ".ds-rail{display:flex;flex-direction:column;gap:4px;width:224px;padding:20px 12px;background:var(--ground);border-right:1px solid var(--hair);font-family:var(--font)} .ds-nav-link{display:flex;align-items:center;gap:12px;min-height:44px;padding:0 12px;border-radius:var(--r-md);color:var(--text-2);font-weight:500;text-decoration:none;transition:background 160ms var(--ease-out),color 160ms var(--ease-out)} .ds-nav-link svg{width:20px;height:20px;flex:none} .ds-nav-link:hover,.ds-nav-link[aria-current=page]{background:var(--raised);color:var(--text)} .ds-nav-link:focus-visible{outline:2px solid var(--amber);outline-offset:2px} .ds-nav-count{margin-left:auto;min-width:24px;padding:2px 8px;border-radius:999px;background:color-mix(in srgb,var(--amber) 18%,transparent);color:var(--amber);font-size:0.8125rem;font-weight:650;text-align:center;font-variant-numeric:tabular-nums}"
+    },
+    {
+      "name": "Segmented Tabs",
+      "kind": "chip",
+      "refersTo": "segmented-tabs",
+      "description": "Type filter on Files; pressed segment is raised with a soft contact shadow.",
+      "html": "<div class=\"ds-tabs\"><button class=\"ds-tab\" aria-pressed=\"true\">All</button><button class=\"ds-tab\" aria-pressed=\"false\">Video</button><button class=\"ds-tab\" aria-pressed=\"false\">Audio</button><button class=\"ds-tab\" aria-pressed=\"false\">Other</button></div>",
+      "css": ".ds-tabs{display:inline-flex;padding:3px;border:1px solid var(--hair);border-radius:var(--r-md);background:var(--panel)} .ds-tab{min-height:34px;padding:0 14px;border:0;border-radius:7px;background:transparent;color:var(--text-2);font:500 0.875rem/1 var(--font);cursor:pointer} .ds-tab:hover{color:var(--text)} .ds-tab:focus-visible{outline:2px solid var(--amber);outline-offset:-3px} .ds-tab[aria-pressed=true]{background:var(--raised);color:var(--text);box-shadow:0 1px 2px rgb(0 0 0 / 0.35)}"
+    },
+    {
+      "name": "File Row",
+      "kind": "card",
+      "refersTo": "file-row",
+      "description": "Ruled list row: warm swatch frame, name and meta, format, size, worded status with reel.",
+      "html": "<a class=\"ds-row\" href=\"#\"><span class=\"ds-frame\" style=\"--sw:hsl(31 42% 33%)\"></span><span class=\"ds-name\"><span class=\"ds-title\">Big Buck Bunny.mp4</span><span class=\"ds-meta\">Big Buck Bunny</span></span><span class=\"ds-cell ds-fmt\">mp4</span><span class=\"ds-cell ds-num\">263.3 MB</span><span class=\"ds-status\"><span class=\"ds-dot\"></span>Ready</span></a>",
+      "css": ".ds-row{display:grid;grid-template-columns:56px minmax(0,1fr) 132px 92px 168px;align-items:center;gap:16px;min-height:60px;padding:8px 12px;border-top:1px solid var(--hair);border-bottom:1px solid var(--hair);background:var(--ground);color:var(--text);font-family:var(--font);text-decoration:none;transition:background 140ms var(--ease-out)} .ds-row:hover,.ds-row:focus-visible{background:color-mix(in srgb,var(--raised) 80%,transparent)} .ds-row:focus-visible{outline:2px solid var(--amber);outline-offset:-2px} .ds-frame{width:56px;aspect-ratio:16/9;border-radius:5px;background:radial-gradient(120% 90% at 30% 20%,color-mix(in srgb,var(--sw) 100%,white 12%),transparent 70%),linear-gradient(160deg,var(--sw),color-mix(in srgb,var(--sw) 40%,black));box-shadow:0 2px 6px rgb(0 0 0 / 0.45)} .ds-name{min-width:0} .ds-title{display:block;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .ds-meta{display:block;color:var(--text-3);font-size:0.8125rem} .ds-cell{color:var(--text-2);font-size:0.875rem} .ds-fmt{text-transform:uppercase;letter-spacing:0.04em;font-size:0.8125rem} .ds-num{font-variant-numeric:tabular-nums} .ds-status{display:inline-flex;align-items:center;gap:8px;color:var(--ready);font-size:0.875rem} .ds-dot{width:8px;height:8px;border-radius:50%;background:currentColor}"
+    },
+    {
+      "name": "Reel Progress",
+      "kind": "custom",
+      "refersTo": "",
+      "description": "Signature progress mark: the rim fills clockwise; hub and spoke holes at 28px and up.",
+      "html": "<span class=\"ds-reel-wrap\"><svg width=\"40\" height=\"40\" viewBox=\"0 0 40 40\" role=\"progressbar\" aria-label=\"62%\" aria-valuenow=\"62\" class=\"ds-reel\"><circle class=\"ds-reel-track\" cx=\"20\" cy=\"20\" r=\"18\"/><circle class=\"ds-reel-fill\" cx=\"20\" cy=\"20\" r=\"18\" stroke-dasharray=\"113.1\" stroke-dashoffset=\"42.98\" transform=\"rotate(-90 20 20)\"/><g class=\"ds-reel-hub\"><circle cx=\"20\" cy=\"20\" r=\"2.7\"/><circle cx=\"20\" cy=\"10.64\" r=\"3\"/><circle cx=\"28.1\" cy=\"24.68\" r=\"3\"/><circle cx=\"11.9\" cy=\"24.68\" r=\"3\"/></g></svg><span>Streaming 62%</span></span>",
+      "css": ".ds-reel-wrap{display:inline-flex;align-items:center;gap:12px;color:var(--amber);font:500 0.875rem var(--font);font-variant-numeric:tabular-nums} .ds-reel circle{fill:none;stroke-width:3} .ds-reel-track{stroke:color-mix(in srgb,currentColor 22%,transparent)} .ds-reel-fill{stroke:currentColor;stroke-linecap:round;transition:stroke-dashoffset 700ms var(--ease-out)} .ds-reel-hub circle{fill:color-mix(in srgb,currentColor 70%,transparent);stroke:none}"
+    },
+    {
+      "name": "Screen",
+      "kind": "custom",
+      "refersTo": "screen",
+      "description": "The player: black 16:9 that spills the film's sampled colour into the room.",
+      "html": "<div class=\"ds-screen\"><div class=\"ds-note\"><strong>This browser can&#39;t play this file yet</strong><p>MKV files need a player like VLC for now. Download it, or open the stream in VLC.</p></div></div>",
+      "css": ".ds-screen{position:relative;width:480px;aspect-ratio:16/9;border-radius:var(--r-lg);background:#000;overflow:hidden;box-shadow:0 0 0 1px color-mix(in srgb,var(--screen) 28%,var(--hair)),0 30px 90px -20px color-mix(in srgb,var(--screen) 55%,transparent),0 0 160px 10px color-mix(in srgb,var(--screen) 22%,transparent);font-family:var(--font)} .ds-note{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:12px;padding:24px;text-align:center;background:radial-gradient(80% 80% at 50% 40%,color-mix(in srgb,var(--screen) 30%,#000),#000)} .ds-note strong{color:var(--text);font-size:1.1875rem} .ds-note p{margin:0;max-width:44ch;color:var(--text-2)}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Projection Booth",
+    "overview": "stash is a projection booth at night. The interface is the dark, warm room: near-black walls with a brown cast, hairline seams, off-white print-stock text. The film is the only real light. When something plays, its sampled colour washes the top of the room and the rail edge, and the player throws a soft spill of that colour around itself. A single tungsten amber lamp marks what to press, where focus is, and what is moving.\n\nThe system is dense and operational, not a poster wall. Files are a ruled list with a small warm swatch per row, transfers are rows with a reel that fills as they download, and the watch page gives the player the full width with an actions rail beside it. One workhorse sans with tabular figures carries everything. There is no display face, no artwork and no invented metadata; colour that stands in for a frame is a generated swatch, never a picture.\n\nThe room scales with the screen: a 224px rail on desktop collapses to an icon rail on tablets and a bottom tab bar on phones. At 1800px and wider (the living-room TV) the root type size rises to 19px, the content centres in a 1520px column and the focus ring thickens to 3px.",
+    "keyCharacteristics": [
+      "Warm near-black tonal layering (ground, panel, raised) separated by 1px hairlines.",
+      "One amber lamp: primary action, focus, progress, the active count and the stash mark.",
+      "Light comes from the film: a live `--screen` colour drives the room wash and the player spill.",
+      "Reel rings, not bars, for download progress.",
+      "One sans (Hanken Grotesk Variable, ss01) with tabular figures for every number.",
+      "Status is always a word; colour and the reel only reinforce it."
+    ],
+    "rules": [
+      {
+        "name": "The Tungsten Rule",
+        "body": "Amber is the lamp, not paint: it marks the primary action, focus, progress and live counts, and the stash mark. At most one amber button per region; never use amber for decoration, headings, dividers or container outlines.",
+        "section": "colors"
+      },
+      {
+        "name": "The Film Is The Light Rule",
+        "body": "The only colour allowed to tint the room is the film's own sampled light (`--screen`) or a file's warm swatch. Room washes mix it at low strength (22–30%) over the dark ground, never as solid fills; only the player's own spill runs stronger (up to 55%).",
+        "section": "colors"
+      },
+      {
+        "name": "The Tabular Rule",
+        "body": "Every number that changes or lines up (sizes, percentages, counts, speeds) is set in tabular figures.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Voice Rule",
+        "body": "No display face and no second family. Emphasis is weight and text step within the one sans.",
+        "section": "typography"
+      },
+      {
+        "name": "The Light Not Lift Rule",
+        "body": "Panels, rows and buttons never float on drop shadows; small contact shadows belong only to the pressed tab and the swatch frame. Only the screen glows, and it glows in the film's colour.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** keep amber to the primary action per region, focus, progress, live counts and the stash mark (The Tungsten Rule).",
+      "**Do** let the film tint the room through `--screen`, mixed at 22–30% in room washes (the player spill alone reaches 55%), and transition hue changes slowly (1.6s).",
+      "**Do** show progress as a reel ring, and always pair status colour with a word.",
+      "**Do** set every changing number in tabular figures.",
+      "**Do** separate surfaces with 1px hairlines and the ground → panel → raised steps.",
+      "**Do** scale for the TV at 1800px and up: 19px root type, a centred 1520px column, a 3px focus ring.",
+      "**Do** use Lucide line icons as inline SVG at 16–20px."
+    ],
+    "donts": [
+      "**Don't** add a second family or a display face; hierarchy is weight and text step in the one sans.",
+      "**Don't** introduce a second UI accent. The only other hues are sage for ready, coral for danger, and the film's own light.",
+      "**Don't** put white text on amber; use burnt ink.",
+      "**Don't** invent artwork, posters or dates; a generated warm swatch is the only stand-in for a frame.",
+      "**Don't** lift panels, rows or buttons on drop shadows; only the screen glows (The Light Not Lift Rule).",
+      "**Don't** mark the current nav item in amber; it takes the raised fill."
+    ]
+  }
+}

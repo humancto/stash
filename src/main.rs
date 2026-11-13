@@ -2,6 +2,7 @@
 //! One binary: torrent engine (librqbit) + HTTP API + web UI.
 
 mod security;
+mod web;
 
 use std::{
     io::SeekFrom,
@@ -17,7 +18,7 @@ use axum::{
     extract::{Path, RawQuery, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware,
-    response::{Html, IntoResponse, Response},
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use librqbit::{
@@ -82,14 +83,16 @@ async fn main() -> anyhow::Result<()> {
 
     let api = Arc::new(Api::new(session, None));
 
-    let app = Router::new()
-        .route("/", get(index))
+    web::warn_if_unbuilt::<web::Dist>();
+    let api_routes = Router::new()
         .route("/api/transfers", get(list).post(add))
         .route("/api/transfers/{id}", get(details).delete(delete))
         .route("/api/transfers/{id}/pause", post(pause))
         .route("/api/transfers/{id}/start", post(start))
         .route("/api/transfers/{id}/files/{file_id}", get(stream))
-        .with_state(api)
+        .with_state(api);
+    // The web UI is the fallback; the guard goes last so it wraps everything.
+    let app = web::attach::<web::Dist, ()>(api_routes)
         .layer(middleware::from_fn_with_state(guard_cfg, security::guard));
 
     tracing::info!(
@@ -139,16 +142,6 @@ fn prepare_state_dir(download: &FsPath, state: &FsPath) -> anyhow::Result<PathBu
         _ => {}
     }
     Ok(new)
-}
-
-async fn index() -> impl IntoResponse {
-    (
-        [(
-            header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static("frame-ancestors 'none'"),
-        )],
-        Html(include_str!("index.html")),
-    )
 }
 
 /// Lists transfers with stats and files. librqbit's list leaves `files` empty
