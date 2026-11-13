@@ -1,14 +1,22 @@
 //! stash: a personal put.io-style box.
 //! One binary: torrent engine (librqbit) + HTTP API + web UI.
 
-use std::{io::SeekFrom, net::SocketAddr, path::PathBuf, sync::Arc};
+mod security;
+
+use std::{
+    io::SeekFrom,
+    net::SocketAddr,
+    path::{Path as FsPath, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::Context;
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, State},
+    extract::{Path, RawQuery, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
+    middleware,
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
@@ -50,14 +58,20 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "127.0.0.1:3030".into())
         .parse()
         .context("STASH_ADDR must be host:port")?;
-    tokio::fs::create_dir_all(&dir).await?;
+    let state_dir =
+        PathBuf::from(std::env::var("STASH_STATE_DIR").unwrap_or_else(|_| "stash-state".into()));
+    let session_dir = prepare_state_dir(&dir, &state_dir)?;
+    let guard_cfg = Arc::new(security::GuardConfig::from_list(
+        &std::env::var("STASH_ALLOWED_HOSTS").unwrap_or_default(),
+    ));
 
     let session = Session::new_with_opts(
         dir.clone(),
         SessionOptions {
             // Remember transfers across restarts, and skip re-hashing on resume.
+            // Kept outside the download dir so torrent content can't overwrite it.
             persistence: Some(SessionPersistenceConfig::Json {
-                folder: Some(dir.join(".session")),
+                folder: Some(session_dir),
             }),
             fastresume: true,
             ..Default::default()
@@ -69,13 +83,14 @@ async fn main() -> anyhow::Result<()> {
     let api = Arc::new(Api::new(session, None));
 
     let app = Router::new()
-        .route("/", get(|| async { Html(include_str!("index.html")) }))
+        .route("/", get(index))
         .route("/api/transfers", get(list).post(add))
         .route("/api/transfers/{id}", get(details).delete(delete))
         .route("/api/transfers/{id}/pause", post(pause))
         .route("/api/transfers/{id}/start", post(start))
         .route("/api/transfers/{id}/files/{file_id}", get(stream))
-        .with_state(api);
+        .with_state(api)
+        .layer(middleware::from_fn_with_state(guard_cfg, security::guard));
 
     tracing::info!(
         "stash listening on http://{addr}, saving to {}",
@@ -84,6 +99,56 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Creates the state dir, refuses layouts where torrent content could write
+/// into it, and moves session state from the old `<download>/.session`
+/// location. Returns the session persistence folder.
+fn prepare_state_dir(download: &FsPath, state: &FsPath) -> anyhow::Result<PathBuf> {
+    std::fs::create_dir_all(download)
+        .with_context(|| format!("creating {}", download.display()))?;
+    std::fs::create_dir_all(state).with_context(|| format!("creating {}", state.display()))?;
+    let d = download.canonicalize()?;
+    let s = state.canonicalize()?;
+    // Either direction of nesting lets torrent content write session files.
+    if s.starts_with(&d) || d.starts_with(s.join("session")) {
+        anyhow::bail!(
+            "STASH_STATE_DIR ({}) must not be inside STASH_DIR ({}): torrent content could overwrite it",
+            s.display(),
+            d.display()
+        );
+    }
+    let old = download.join(".session");
+    let new = state.join("session");
+    match (old.exists(), new.exists()) {
+        (true, true) => anyhow::bail!(
+            "found session state in both {} (old) and {} (new); keep one and remove the other",
+            old.display(),
+            new.display()
+        ),
+        (true, false) => {
+            tracing::warn!(from = %old.display(), to = %new.display(), "moving session state out of the download dir");
+            std::fs::rename(&old, &new).with_context(|| {
+                format!(
+                    "could not move {} to {}; move it by hand and restart",
+                    old.display(),
+                    new.display()
+                )
+            })?;
+        }
+        _ => {}
+    }
+    Ok(new)
+}
+
+async fn index() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static("frame-ancestors 'none'"),
+        )],
+        Html(include_str!("index.html")),
+    )
 }
 
 /// Lists transfers with stats and files. librqbit's list leaves `files` empty
@@ -160,6 +225,7 @@ async fn delete(
 async fn stream(
     State(api): State<Arc<Api>>,
     Path((id, file_id)): Path<(TorrentIdOrHash, usize)>,
+    RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Result<Response> {
     let mut file = api.api_stream(id, file_id).await?;
@@ -167,9 +233,50 @@ async fn stream(
 
     let mut out = HeaderMap::new();
     out.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
-    if let Ok(mime) = api.torrent_file_mime_type(id, file_id) {
-        out.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
+    // Torrent content is untrusted. Only media and raster images render
+    // inline; anything else (html, svg, xml, pdf, ...) is a download. The CSP
+    // sandbox stops script even if a browser renders something anyway.
+    let mime = api.torrent_file_mime_type(id, file_id).ok();
+    let inline = security::is_inline_safe(mime) && !security::wants_download(query.as_deref());
+    match mime {
+        Some(m) if inline => out.insert(header::CONTENT_TYPE, HeaderValue::from_static(m)),
+        _ => out.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/octet-stream"),
+        ),
+    };
+    if !inline {
+        let name = api
+            .api_torrent_details(id)
+            .ok()
+            .and_then(|d| d.files)
+            .and_then(|f| f.into_iter().nth(file_id))
+            .and_then(|f| f.components.last().cloned())
+            .unwrap_or_else(|| "download".into());
+        let cd = HeaderValue::from_str(&security::content_disposition(true, &name))
+            .unwrap_or_else(|_| HeaderValue::from_static("attachment"));
+        out.insert(header::CONTENT_DISPOSITION, cd);
     }
+    // `sandbox` gives the document an opaque origin, which stops Chromium's
+    // media viewer from loading the file when it is opened in a tab. Inline
+    // types are media and raster images only (no script, nosniff), so they
+    // skip it; everything served as a download keeps it.
+    out.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(if inline {
+            "frame-ancestors 'none'"
+        } else {
+            "sandbox; frame-ancestors 'none'"
+        }),
+    );
+    out.insert(
+        "cross-origin-resource-policy",
+        HeaderValue::from_static("same-origin"),
+    );
+    out.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
 
     let range = parse_range(
         headers.get(header::RANGE).and_then(|v| v.to_str().ok()),
@@ -326,6 +433,44 @@ mod tests {
         for (header, len, want) in cases {
             assert_eq!(&parse_range(*header, *len), want, "{header:?} len={len}");
         }
+    }
+
+    #[test]
+    fn state_dir_migrates_old_session() {
+        let root = tempfile::tempdir().unwrap();
+        let (dl, st) = (
+            root.path().join("downloads"),
+            root.path().join("stash-state"),
+        );
+        std::fs::create_dir_all(dl.join(".session")).unwrap();
+        std::fs::write(dl.join(".session/session.json"), "{}").unwrap();
+        let got = super::prepare_state_dir(&dl, &st).unwrap();
+        assert_eq!(got, st.join("session"));
+        assert!(st.join("session/session.json").exists());
+        assert!(!dl.join(".session").exists());
+        // Second start is a no-op.
+        assert_eq!(
+            super::prepare_state_dir(&dl, &st).unwrap(),
+            st.join("session")
+        );
+    }
+
+    #[test]
+    fn state_dir_refuses_both_and_nested() {
+        let root = tempfile::tempdir().unwrap();
+        let (dl, st) = (
+            root.path().join("downloads"),
+            root.path().join("stash-state"),
+        );
+        std::fs::create_dir_all(dl.join(".session")).unwrap();
+        std::fs::create_dir_all(st.join("session")).unwrap();
+        assert!(super::prepare_state_dir(&dl, &st).is_err());
+        assert!(dl.join(".session").exists(), "must not touch either copy");
+        assert!(super::prepare_state_dir(&dl, &dl.join("state")).is_err());
+        assert!(super::prepare_state_dir(&dl, &dl).is_err());
+        // Download dir equal to (or inside) the session folder.
+        let st2 = root.path().join("st2");
+        assert!(super::prepare_state_dir(&st2.join("session"), &st2).is_err());
     }
 
     #[test]

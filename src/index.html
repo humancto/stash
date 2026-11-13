@@ -132,7 +132,7 @@ function render(torrents) {
         li.append(a);
       }
       const dl = el("a", null, "Download");
-      dl.href = src;
+      dl.href = src + "?download=1";
       dl.download = f.name.split("/").pop();
       li.append(dl);
       files.append(li);
