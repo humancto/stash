@@ -1,0 +1,6 @@
+/target
+/downloads/
+.DS_Store
+node_modules/
+/web/dist/
+.env
