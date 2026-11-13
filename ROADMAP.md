@@ -4,7 +4,7 @@ Ordered by priority. One item per branch and PR, reviewed by the matching expert
 
 ## P0: make it work
 
-- [ ] **fix-file-list**: `/api/transfers` includes each transfer's files so the UI shows Play/Download; handle suffix ranges (`bytes=-N`) in the stream endpoint.
+- [x] **fix-file-list**: `/api/transfers` includes each transfer's files so the UI shows Play/Download; handle suffix ranges (`bytes=-N`) in the stream endpoint.
 - [ ] **security-hardening**: (1) Serve only audio/video/subtitle MIME types inline; everything else `application/octet-stream` + `Content-Disposition: attachment`; `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` on file responses. (2) Reject unexpected `Host` headers (DNS rebinding) and require same-origin `Origin` on state-changing requests (CSRF). (3) `overwrite: false` by default and session state moved outside the download directory.
 - [ ] **web-ui**: Replace `src/index.html` with a Vite + React + TS app in `web/`, embedded in the binary. Views: Files, Transfers, File page (player, actions rail, subtitles slot, media-info slot). Works on Mac, phone and TV. Own visual identity, not put.io's.
 - [ ] **network-privacy**: Fixed listen port over TCP + uTP, UPnP toggle, bind torrent traffic to a named interface (VPN kill switch), peer limit, all via env/config. Document VPN + port-forwarding setup.
