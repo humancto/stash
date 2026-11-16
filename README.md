@@ -35,6 +35,7 @@ The web UI source is in `web/`. `make web` builds it into `web/dist`.
 | `STASH_LISTEN_PORT` | (none) | Accept incoming peers on this port (TCP and uTP). With a VPN, use the port it forwards |
 | `STASH_UPNP` | `off` | Open the listen port on your router with UPnP. Ignored while the kill switch is on |
 | `STASH_PEER_LIMIT` | librqbit's | Maximum peers per transfer |
+| `STASH_SEEDING` | `stop` | When to stop sharing a finished transfer: `stop` (as soon as it finishes), `ratio:1.5` (after uploading 1.5× its size), `time:24h` / `90m` / `7d` (that long after it finished), `forever`. Overrides the Privacy page |
 | `STASH_IP_LOOKUP` | `on` | `off` stops stash asking Cloudflare for its public IP. The network status then shows only the interface |
 
 ## Privacy: kill switch and blocklist
@@ -46,6 +47,15 @@ The **Privacy** page shows the path torrent traffic takes (stash → interface �
 - **Local discovery is off** whenever the kill switch is on (it announces what you download to your LAN), and the DHT keeps its own identity in `<STASH_STATE_DIR>/dht-vpn.json`.
 - **Blocklist (default: on).** stash downloads the list once a day (never while the kill switch has stopped traffic) into `<STASH_STATE_DIR>/blocklist` and loads it when it starts. A new list applies after a restart; the Privacy page has "Restart to apply". It is a filter, not protection.
 - **VPN on your router:** the Mac only sees Wi-Fi, so use Off.
+
+## Seeding
+
+By default stash stops sharing a transfer as soon as it finishes: it pauses it (the file still plays and downloads keep working). Peers still get pieces from you while it downloads; that is how BitTorrent works. Seeding longer helps others finish and keeps your address visible to peers for longer.
+
+- Choose on the Privacy page or with `STASH_SEEDING`: stop when finished, until a ratio, for a while, or keep seeding. Changing it applies at once, no restart.
+- "Seed" on a finished transfer shares it again; if the rule had stopped it, the rule then leaves it alone until you pause it. Under a ratio or time limit that isn't reached yet, the rule still applies.
+- stash keeps its own upload total per transfer (librqbit's resets on every pause and restart) in `<STASH_STATE_DIR>/seeding.json`. Time limits count wall-clock time since stash first saw the transfer finished; for transfers that were already finished before this version, that is from the upgrade.
+- **Upgrade note:** transfers that were finished and seeding stop seeding a few seconds after you start this version, unless you pick "Keep seeding".
 
 ## Network status
 

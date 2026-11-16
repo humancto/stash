@@ -307,10 +307,11 @@ Calm, solid and legible from the sofa.
 
 ### Privacy page
 
-Operate mode, top to bottom: page head; the **signal path**; the network panel; then ruled setting sections (Kill switch, Blocklist, Connections) and a right-aligned "Save and restart" primary button (the page's one amber button).
+Operate mode, top to bottom: page head; the **signal path**; the network panel; then ruled setting sections (Kill switch, Blocklist, Seeding, Connections) and a right-aligned primary button (the page's one amber button) that reads "Save and restart" when a changed setting needs a restart and "Save" otherwise.
 
 - **Signal path:** three hops in a row (stash · interface · Peers see), panel fill, hairline border, 10px radius, 19px/650 labels with label-size detail, joined by 2px links. Bound to a VPN: the interface and peer hops and links take sage at 45% border / 7% fill; exposed: coral the same way; blocked or reconnecting: muted, the second link dashed and the last hop's border dashed ("Peers see: Nothing"). At ≤760px the hops stack and the links turn vertical.
 - **Choice cards (kill switch):** three radio cards in a row (one column ≤1180px), panel fill, strong hairline, 10px radius; the native radio uses amber accent-color; the checked card lifts to raised with a faded-print border. "Recommended" is a dim label, not a badge.
+- **Seeding cards:** four choice cards (two columns ≤1180px, one on phones). Ratio and Hours fields sit under their card, outside the radio label, each with a visible label and a dim unit ("× its size", "after it finishes"); 88px text fields with tabular figures, coral border and an error line when invalid. Focusing a field selects its card.
 - **Switch:** 48×28 pill track. Off: raised track, faded knob. On: amber border, amber 30% track, amber knob (a control state, like focus).
 - **Locked by env:** the control is disabled and a dim line names the variable.
 

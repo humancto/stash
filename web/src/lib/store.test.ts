@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Transfer } from "./api";
 import { createTransferStore } from "./store";
 
-const t = (id: number, name: string): Transfer => ({ id, infoHash: String(id), name, files: null, stats: null });
+const t = (id: number, name: string): Transfer => ({ id, infoHash: String(id), name, files: null, stats: null, seeding: null });
 
 function deferred<T>() {
   let resolve!: (v: T) => void;

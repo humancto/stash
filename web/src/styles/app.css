@@ -637,6 +637,47 @@ a {
   line-height: 1.45;
 }
 
+/* Seeding: four cards; ratio and hours fields sit under their card,
+ * outside the radio's label, with their own labels. */
+.choices--four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.choice-wrap {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+.choice-field {
+  display: grid;
+  grid-template-columns: auto 88px minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 8px;
+  padding: 0 4px;
+  font-size: var(--t-xs);
+}
+.choice-field-label {
+  color: var(--text-2);
+}
+.choice-field-unit {
+  color: var(--text-3);
+}
+.choice-field .input {
+  width: 88px;
+  height: 32px;
+  padding: 0 10px;
+  font-size: var(--t-sm);
+}
+.choice-field .input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+.choice-field .input[readonly] {
+  opacity: 0.8;
+}
+.choice-field-error {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
 /* Switch: track and knob; on is sage-free amber per the Tungsten Rule
  * (it is a control state, like focus), off is the raised step. */
 .switch {
@@ -764,6 +805,14 @@ a {
 
 @media (max-width: 1180px) {
   .choices {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .choices--four {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 640px) {
+  .choices--four {
     grid-template-columns: minmax(0, 1fr);
   }
 }

@@ -37,6 +37,8 @@ const settingsBody = {
   listen_port: null,
   restart_pending: false,
   boot_id: "b1",
+  seeding: { mode: "stop" },
+  seeding_from: "default",
 };
 
 /** Answers by URL, so the network poller doesn't get the transfers body. */
@@ -83,10 +85,11 @@ describe("routing", () => {
     expect(await screen.findByRole("radio", { name: /Strict/ })).toBeChecked();
     expect(screen.getByRole("switch", { name: "Use the blocklist" })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByText(/595,916 ranges/)).toBeInTheDocument();
-    const save = screen.getByRole("button", { name: "Save and restart" });
+    const save = screen.getByRole("button", { name: "Save" });
     expect(save).toHaveAttribute("aria-disabled", "true");
     await userEvent.click(screen.getByRole("radio", { name: /Warn/ }));
     expect(save).not.toHaveAttribute("aria-disabled");
+    expect(save).toHaveTextContent("Save and restart");
   });
 
   it("Escape on a deep-linked file page goes to Files", async () => {

@@ -2,7 +2,18 @@ import { Download, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { NetworkPanel } from "../components/NetworkStatus";
 import { SignalPath } from "../components/SignalPath";
-import { api, type KillLevel, type Settings } from "../lib/api";
+import { api, type KillLevel, type SeedingPolicy, type Settings } from "../lib/api";
+import {
+  DEFAULT_HOURS,
+  DEFAULT_RATIO,
+  describePolicy,
+  draftFrom,
+  minutesToHours,
+  policyFromDraft,
+  samePolicy,
+  type SeedingDraft,
+  type SeedingMode,
+} from "../lib/seeding";
 import {
   NETWORK_INTERVAL_MS,
   isStale,
@@ -105,6 +116,7 @@ export function Privacy() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [level, setLevel] = useState<KillLevel | null>(null);
   const [blocklist, setBlocklist] = useState<boolean | null>(null);
+  const [seedDraft, setSeedDraft] = useState<SeedingDraft | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
   const [message, setMessage] = useState("");
   const life = useRef<AbortController | null>(null);
@@ -118,6 +130,7 @@ export function Privacy() {
       setLoadError(null);
       setLevel((l) => l ?? s.vpn);
       setBlocklist((b) => b ?? s.blocklist);
+      setSeedDraft((d) => d ?? draftFrom(s.seeding));
       return s;
     } catch (e) {
       if (!signal?.aborted)
@@ -146,6 +159,7 @@ export function Privacy() {
       setSettings(s);
       setLevel(s.vpn);
       setBlocklist(s.blocklist);
+      setSeedDraft(draftFrom(s.seeding));
       const problem = verify(s);
       setPhase(problem ? "failed" : "done");
       setMessage(problem ?? "Done. stash restarted with these settings.");
@@ -179,23 +193,37 @@ export function Privacy() {
     r?.killSwitch?.state === "reconnecting";
   const vpnLocked = settings?.vpnFrom === "env";
   const listLocked = settings?.blocklistFrom === "env";
-  const changed =
+  const seedLocked = settings?.seedingFrom === "env";
+  const vpnDirty = settings !== null && level !== null && level !== settings.vpn && !vpnLocked;
+  const listDirty =
+    settings !== null && blocklist !== null && blocklist !== settings.blocklist && !listLocked;
+  const seedResult = seedDraft ? policyFromDraft(seedDraft) : null;
+  const seedDirty =
     settings !== null &&
-    ((level !== null && level !== settings.vpn) ||
-      (blocklist !== null && blocklist !== settings.blocklist));
+    seedDraft !== null &&
+    !seedLocked &&
+    (!seedResult?.ok || !samePolicy(seedResult.policy, settings.seeding));
+  const seedInvalid = seedDirty && seedResult !== null && !seedResult.ok;
+  const changed = vpnDirty || listDirty || seedDirty;
+  const needsRestart = vpnDirty || listDirty;
   const busy = phase === "saving" || phase === "restarting";
 
   async function save() {
-    if (!settings || !changed || busy) return;
-    const update: { vpn?: KillLevel; blocklist?: boolean } = {};
-    if (level !== null && level !== settings.vpn && !vpnLocked)
-      update.vpn = level;
-    if (blocklist !== null && blocklist !== settings.blocklist && !listLocked)
-      update.blocklist = blocklist;
+    if (!settings || !changed || busy || seedInvalid) return;
+    const update: {
+      vpn?: KillLevel;
+      blocklist?: boolean;
+      seeding?: SeedingPolicy;
+    } = {};
+    if (vpnDirty && level !== null) update.vpn = level;
+    if (listDirty && blocklist !== null) update.blocklist = blocklist;
+    // Env-locked seeding is never sent (the server would refuse the lot).
+    if (seedDirty && seedResult?.ok) update.seeding = seedResult.policy;
     setPhase("saving");
     setMessage("");
+    let restart: boolean;
     try {
-      await api.saveSettings(update);
+      ({ restart } = await api.saveSettings(update));
     } catch (e) {
       setPhase("failed");
       setMessage(
@@ -203,9 +231,22 @@ export function Privacy() {
       );
       return;
     }
+    if (!restart) {
+      // Seeding only: applied already, no restart.
+      const s = await load();
+      if (s) setSeedDraft(draftFrom(s.seeding));
+      setPhase("done");
+      setMessage(
+        update.seeding?.mode === "stop"
+          ? "Saved. Finished transfers stop seeding within a few seconds."
+          : "Saved. It applies now.",
+      );
+      return;
+    }
     await settle(settings.bootId, (s) =>
       (update.vpn !== undefined && s.vpn !== update.vpn) ||
-      (update.blocklist !== undefined && s.blocklist !== update.blocklist)
+      (update.blocklist !== undefined && s.blocklist !== update.blocklist) ||
+      (update.seeding !== undefined && !samePolicy(s.seeding, update.seeding))
         ? "stash restarted, but the new settings didn't take effect."
         : null,
     );
@@ -432,6 +473,17 @@ export function Privacy() {
             )}
           </fieldset>
 
+          {seedDraft && (
+            <SeedingSection
+              draft={seedDraft}
+              setDraft={setSeedDraft}
+              locked={seedLocked}
+              lockedPolicy={settings.seeding}
+              busy={busy}
+              error={seedInvalid && seedResult && !seedResult.ok ? seedResult : null}
+            />
+          )}
+
           <section className="setting" aria-labelledby="conn-title">
             <h2 id="conn-title" className="setting-title">
               Connections
@@ -451,10 +503,6 @@ export function Privacy() {
                     </>
                   )}
                 </dd>
-              </div>
-              <div>
-                <dt>Seeding</dt>
-                <dd>Stop seeding when a download finishes: coming next.</dd>
               </div>
             </dl>
           </section>
@@ -476,12 +524,194 @@ export function Privacy() {
               type="submit"
               className="btn btn--primary"
               // aria-disabled keeps focus on the button while it applies.
-              aria-disabled={!changed || busy || undefined}
+              aria-disabled={!changed || busy || seedInvalid || undefined}
             >
-              {busy ? "Applying…" : "Save and restart"}
+              {busy
+                ? needsRestart || phase === "restarting"
+                  ? "Applying…"
+                  : "Saving…"
+                : needsRestart
+                  ? "Save and restart"
+                  : "Save"}
             </button>
           </div>
         </form>
+      )}
+    </div>
+  );
+}
+
+const SEED_CHOICES: { id: SeedingMode; title: string; text: string }[] = [
+  {
+    id: "stop",
+    title: "Stop when finished",
+    text: "Stop sharing once a download finishes. Peers still get pieces from you while it downloads; that's how BitTorrent works.",
+  },
+  {
+    id: "ratio",
+    title: "Until a ratio",
+    text: "Keep sharing until it has uploaded a multiple of its size.",
+  },
+  {
+    id: "time",
+    title: "For a while",
+    text: "Keep sharing for a number of hours after it finishes.",
+  },
+  {
+    id: "forever",
+    title: "Keep seeding",
+    text: "Share until you pause or delete it.",
+  },
+];
+
+function SeedingSection({
+  draft,
+  setDraft,
+  locked,
+  lockedPolicy,
+  busy,
+  error,
+}: {
+  draft: SeedingDraft;
+  setDraft: (d: SeedingDraft) => void;
+  locked: boolean;
+  lockedPolicy: SeedingPolicy;
+  busy: boolean;
+  error: { field: "ratio" | "hours"; error: string } | null;
+}) {
+  const off = locked || busy;
+  const set = (next: Partial<SeedingDraft>) => {
+    if (!off) setDraft({ ...draft, ...next });
+  };
+  // An env value that doesn't fit the hours field is shown as text.
+  const lockedText =
+    locked &&
+    lockedPolicy.mode === "time" &&
+    minutesToHours(lockedPolicy.minutes) === null
+      ? describePolicy(lockedPolicy)
+      : null;
+  return (
+    <fieldset
+      className="setting"
+      aria-describedby={locked ? "seed-help seed-lock" : "seed-help"}
+    >
+      <legend className="setting-title">Seeding</legend>
+      <p className="setting-text" id="seed-help">
+        Seeding helps others finish their downloads, and keeps your address
+        visible to peers for longer.
+      </p>
+      {locked && (
+        <p className="setting-lock" id="seed-lock">
+          Set by <code>STASH_SEEDING</code>
+          {lockedText ? ` (${lockedText})` : ""}. Change it there.
+        </p>
+      )}
+      <div className="choices choices--four">
+        {SEED_CHOICES.map((c) => (
+          <div key={c.id} className="choice-wrap">
+            <label className="choice" data-locked={off || undefined}>
+              <input
+                type="radio"
+                name="seeding"
+                value={c.id}
+                checked={draft.mode === c.id}
+                aria-disabled={off || undefined}
+                onChange={() => set({ mode: c.id })}
+              />
+              <span className="choice-body">
+                <span className="choice-title">
+                  {c.title}
+                  {c.id === "stop" && (
+                    <span className="choice-tag">Recommended</span>
+                  )}
+                </span>
+                <span className="choice-text">{c.text}</span>
+              </span>
+            </label>
+            {c.id === "ratio" && (
+              <NumberField
+                id="seed-ratio"
+                label="Ratio"
+                unit="× its size"
+                value={draft.ratio}
+                placeholder={DEFAULT_RATIO}
+                locked={off}
+                error={error?.field === "ratio" ? error.error : null}
+                onFocus={() => set({ mode: "ratio" })}
+                onChange={(ratio) => set({ ratio, mode: "ratio" })}
+              />
+            )}
+            {c.id === "time" && (
+              <NumberField
+                id="seed-hours"
+                label="Hours"
+                unit="after it finishes"
+                value={draft.hours}
+                placeholder={DEFAULT_HOURS}
+                locked={off}
+                error={error?.field === "hours" ? error.error : null}
+                onFocus={() => set({ mode: "time" })}
+                onChange={(hours) => set({ hours, mode: "time" })}
+              />
+            )}
+          </div>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
+function NumberField({
+  id,
+  label,
+  unit,
+  value,
+  placeholder,
+  locked,
+  error,
+  onFocus,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  unit: string;
+  value: string;
+  placeholder: string;
+  locked: boolean;
+  error: string | null;
+  onFocus: () => void;
+  onChange: (v: string) => void;
+}) {
+  const describedBy = [`${id}-unit`, error ? `${id}-error` : null]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <div className="choice-field">
+      <label htmlFor={id} className="choice-field-label">
+        {label}
+      </label>
+      <input
+        id={id}
+        className="input input--sm num"
+        type="text"
+        inputMode="decimal"
+        autoComplete="off"
+        value={value}
+        placeholder={placeholder}
+        readOnly={locked}
+        aria-disabled={locked || undefined}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy}
+        onFocus={onFocus}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <span id={`${id}-unit`} className="choice-field-unit">
+        {unit}
+      </span>
+      {error && (
+        <p id={`${id}-error`} className="choice-field-error status--error">
+          {error}
+        </p>
       )}
     </div>
   );

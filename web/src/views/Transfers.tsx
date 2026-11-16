@@ -13,24 +13,9 @@ import {
   formatSpeed,
   percent,
 } from "../lib/format";
+import { stateLabel } from "../lib/seeding";
 import { transfers, useTransfers } from "../lib/store";
 import { statusText } from "../components/Status";
-
-function stateLabel(t: Transfer): string {
-  const s = t.stats;
-  if (!s) return "Starting";
-  switch (s.state) {
-    case "initializing":
-    case "initializing_paused":
-      return "Checking files";
-    case "paused":
-      return s.finished ? "Done · paused" : "Paused";
-    case "error":
-      return s.error ? `Error: ${s.error}` : "Error";
-    case "live":
-      return s.finished ? "Done · seeding" : "Downloading";
-  }
-}
 
 function TransferRow({ t }: { t: Transfer }) {
   const [open, setOpen] = useState(false);
@@ -94,6 +79,9 @@ function TransferRow({ t }: { t: Transfer }) {
             {speed && <span>{speed}</span>}
             {eta && <span>{eta}</span>}
             {s?.live?.peers != null && <span>{s.live.peers} peers</span>}
+            {t.seeding && t.seeding.uploadedBytes > 0 && (
+              <span>Uploaded {formatBytes(t.seeding.uploadedBytes)}</span>
+            )}
             {error && <span className="status--error">{error}</span>}
           </div>
         </div>
@@ -122,14 +110,28 @@ function TransferRow({ t }: { t: Transfer }) {
             disabled={busy || s?.state === "initializing"}
             aria-disabled={writesPaused ? true : undefined}
             title={writesPaused ?? undefined}
+            aria-describedby={
+              writesPaused
+                ? undefined
+                : paused && s?.finished
+                  ? `seed-hint-${t.id}`
+                  : undefined
+            }
           >
             {paused ? (
               <Play aria-hidden="true" />
             ) : (
               <Pause aria-hidden="true" />
             )}
-            {paused ? (s?.finished ? "Resume seeding" : "Resume") : "Pause"}
+            {paused ? (s?.finished ? "Seed" : "Resume") : "Pause"}
           </button>
+          {paused && s?.finished && (
+            <span id={`seed-hint-${t.id}`} className="visually-hidden">
+              Shares it with peers again.
+              {t.seeding?.stoppedByRule &&
+                " The seeding rule leaves it alone until you pause it."}
+            </span>
+          )}
           <ConfirmDelete
             pausedReason={writesPaused ?? undefined}
             className="btn--sm"
