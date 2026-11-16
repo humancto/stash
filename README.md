@@ -3,6 +3,10 @@
 A personal put.io-style box: one Rust binary with a torrent engine
 ([librqbit](https://github.com/ikatson/rqbit), Apache-2.0), an HTTP API and a web UI.
 
+**A learning project.** stash shows how a BitTorrent client is put together: a peer-to-peer engine, streaming files while they download (HTTP range requests over pieces), a web UI that works on a phone and a TV, and the privacy side of P2P (what peers can see, a VPN kill switch that follows the tunnel, a peer blocklist). It is a personal tool, not a product.
+
+**Legal use only.** Use it for content you have the right to download and share: public-domain films (the test torrents here are Blender's open movies), Linux images, your own files. BitTorrent shows your IP address to every peer; the Privacy page and kill switch reduce that, they don't make anything legal. No license is granted yet: you can read the code, but not reuse it.
+
 ## Build and run
 
 Needs Rust and Node.js (for the web UI).
