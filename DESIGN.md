@@ -192,7 +192,7 @@ A brown-black room lit by one amber lamp and by whatever film is on the screen.
 
 ### Tertiary
 
-- **Ready Sage** (ready): the "Ready" status dot and word, and the "Copied" confirmation.
+- **Ready Sage** (ready): the "Ready" status dot and word, and the "Copied" confirmation, and the VPN-only network status and signal path.
 - **Signal Coral** (danger): destructive outlines and text, error status. It sits on **Ember Ground** (danger-ground) in banners, the add-error toast and the inline delete confirm, with **Blush Text** (danger-text) for message copy.
 
 ### Neutral
@@ -301,9 +301,18 @@ Calm, solid and legible from the sofa.
 ### Navigation
 
 - **Rail:** wordmark with the reel mark at top, then 44px nav links (20px icon, 12px gap) in faded print. Hover and current page both take the raised fill and print text; the current page is not amber. The footer holds the network chip.
-- **Network chip:** rail footer, 40px, hairline border, 10px radius. A shield icon (shield-off for "No VPN") with a 7px status dot at its lower right, then the word at label size in the status colour: sage "VPN tunnel", coral "No VPN", dim "Checking", "Unknown" (failed or stale check) and "Offline". Never shows an IP. In the icon rail only the icon and dot show; on phones there is no chip.
+- **Network chip:** rail footer, 40px, hairline border, 10px radius. A shield icon (shield-off for "No VPN") with a 7px status dot at its lower right, then the word at label size in the status colour: sage "VPN only" (kill switch bound) or "VPN tunnel", coral "No VPN", dim "Stopped" (kill switch, no VPN), "Reconnecting" (VPN changed), "Restarting" (settings applied), coral "Restart failed" (stash could not restart itself), "Checking", "Unknown" (failed or stale check) and "Offline". Never shows an IP. In the icon rail only the icon and dot show; on phones there is no chip.
 - **Segmented tabs:** a panel track with a 3px inset; the pressed tab is raised with the soft pressed shadow.
 - **Phone:** a fixed bottom tab bar with stacked icon and label, 52px targets.
+
+### Privacy page
+
+Operate mode, top to bottom: page head; the **signal path**; the network panel; then ruled setting sections (Kill switch, Blocklist, Connections) and a right-aligned "Save and restart" primary button (the page's one amber button).
+
+- **Signal path:** three hops in a row (stash · interface · Peers see), panel fill, hairline border, 10px radius, 19px/650 labels with label-size detail, joined by 2px links. Bound to a VPN: the interface and peer hops and links take sage at 45% border / 7% fill; exposed: coral the same way; blocked or reconnecting: muted, the second link dashed and the last hop's border dashed ("Peers see: Nothing"). At ≤760px the hops stack and the links turn vertical.
+- **Choice cards (kill switch):** three radio cards in a row (one column ≤1180px), panel fill, strong hairline, 10px radius; the native radio uses amber accent-color; the checked card lifts to raised with a faded-print border. "Recommended" is a dim label, not a badge.
+- **Switch:** 48×28 pill track. Off: raised track, faded knob. On: amber border, amber 30% track, amber knob (a control state, like focus).
+- **Locked by env:** the control is disabled and a dim line names the variable.
 
 ### Network panel
 

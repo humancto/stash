@@ -6,11 +6,13 @@ interface Props {
   onConfirm: () => Promise<void>;
   label?: string;
   className?: string;
+  /** Why deleting is not possible right now (shown, and the click is refused). */
+  pausedReason?: string | undefined;
 }
 
 /** Two-step delete without a modal: the button turns into an inline
  * confirmation that says exactly what will be removed. */
-export function ConfirmDelete({ what, onConfirm, label = "Delete", className = "" }: Props) {
+export function ConfirmDelete({ what, onConfirm, label = "Delete", className = "", pausedReason }: Props) {
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,7 +30,16 @@ export function ConfirmDelete({ what, onConfirm, label = "Delete", className = "
 
   if (!asking) {
     return (
-      <button ref={triggerRef} type="button" className={`btn btn--danger ${className}`} onClick={() => setAsking(true)}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`btn btn--danger ${className}`}
+        aria-disabled={pausedReason ? true : undefined}
+        title={pausedReason}
+        onClick={() => {
+          if (!pausedReason) setAsking(true);
+        }}
+      >
         <Trash2 aria-hidden="true" />
         {label}
       </button>

@@ -26,7 +26,22 @@ The web UI source is in `web/`. `make web` builds it into `web/dist`.
 | `STASH_ADDR` | `127.0.0.1:3030` | Listen address. There is no auth, so keep it local or behind Tailscale |
 | `STASH_STATE_DIR` | `./stash-state` | Session state (transfer list, resume data). Must be outside `STASH_DIR`. State in the old `<STASH_DIR>/.session` is moved here on first start. Because the default is relative, `STASH_DIR` can't be `.` or a parent of the working directory unless `STASH_STATE_DIR` is set elsewhere |
 | `STASH_ALLOWED_HOSTS` | (none) | Comma-separated host names accepted in the `Host` header besides IP addresses and `localhost`, e.g. a Tailscale MagicDNS name |
+| `STASH_VPN` | `strict` | Kill switch. `strict`: without a VPN, no torrent traffic. `warn`: without a VPN, torrents use your normal connection (red warning). `off`: never tie torrents to a VPN (e.g. a router VPN). An interface name (e.g. `wg0`) makes only that interface count as the VPN. Overrides the Privacy page |
+| `STASH_BLOCKLIST` | daily list | Peer IP blocklist: `off`, `on`, a URL or a file (P2P format, plain or gzip). Default: [Naunter/BT_BlockLists](https://github.com/Naunter/BT_BlockLists). Overrides the Privacy page |
+| `STASH_LISTEN_PORT` | (none) | Accept incoming peers on this port (TCP and uTP). With a VPN, use the port it forwards |
+| `STASH_UPNP` | `off` | Open the listen port on your router with UPnP. Ignored while the kill switch is on |
+| `STASH_PEER_LIMIT` | librqbit's | Maximum peers per transfer |
 | `STASH_IP_LOOKUP` | `on` | `off` stops stash asking Cloudflare for its public IP. The network status then shows only the interface |
+
+## Privacy: kill switch and blocklist
+
+The **Privacy** page shows the path torrent traffic takes (stash → interface → what peers see) and holds the settings. Settings are saved in `<STASH_STATE_DIR>/settings.json`; an env var wins over the page.
+
+- **Kill switch (default: strict).** stash finds the VPN by itself: the interface that carries internet traffic, if its name is a known tunnel (`utun`, `tun`, `wg`, `tailscale`, `nordlynx`, `proton`, `ipsec`, `gpd`, `zt`). Torrent traffic (peers, trackers, DHT) is bound to that interface only. VPN apps make a new tunnel on every reconnect, so stash checks every 3 seconds. When the tunnel goes away or changes, torrents stop at once; when the new state has held for a few seconds, stash restarts itself (about 2 s without the web UI) bound to the new tunnel. Without a VPN, `strict` runs with no networking at all (no DHT, trackers or local discovery), and files on disk still play.
+- **Breaking change:** before this version stash used whatever connection the Mac used. If you torrent without a VPN, set `STASH_VPN=warn` or `off`, or pick Warn/Off on the Privacy page.
+- **Local discovery is off** whenever the kill switch is on (it announces what you download to your LAN), and the DHT keeps its own identity in `<STASH_STATE_DIR>/dht-vpn.json`.
+- **Blocklist (default: on).** stash downloads the list once a day (never while the kill switch has stopped traffic) into `<STASH_STATE_DIR>/blocklist` and loads it when it starts. A new list applies after a restart; the Privacy page has "Restart to apply". It is a filter, not protection.
+- **VPN on your router:** the Mac only sees Wi-Fi, so use Off.
 
 ## Network status
 

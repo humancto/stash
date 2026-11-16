@@ -23,6 +23,7 @@ describe("parseNetwork", () => {
   it("parses a report with a routed and an unrouted family", () => {
     expect(parseNetwork(wire)).toEqual({
       verdict: "tunnel",
+      killSwitch: null,
       checkedAt: 1_700_000_000,
       lookupEnabled: true,
       ipv4: {
@@ -71,6 +72,7 @@ const report = (
   verdict: NetworkReport["verdict"] = "tunnel",
 ): NetworkReport => ({
   verdict,
+  killSwitch: null,
   checkedAt: checkedAtMs / 1000,
   lookupEnabled: true,
   ipv4: { route: false },
@@ -232,5 +234,155 @@ describe("network store", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(fetchReport).toHaveBeenCalledTimes(1);
     expect(store.getSnapshot().report).toBeNull();
+  });
+});
+
+describe("kill switch and settings parsing", () => {
+  it("parses kill_switch and tolerates its absence", async () => {
+    const { parseNetwork: parse } = await import("./api");
+    const ks = {
+      level: "warn",
+      interface: null,
+      level_from: "file",
+      bound_to: "utun6",
+      state: "bound",
+      listen_port: null,
+      accepting_writes: true,
+      restart_reason: null,
+      boot_id: "abc",
+    };
+    expect(parse({ ...wire, kill_switch: ks }).killSwitch).toEqual({
+      level: "warn",
+      interface: null,
+      levelFrom: "file",
+      boundTo: "utun6",
+      state: "bound",
+      restartReason: null,
+      listenPort: null,
+      acceptingWrites: true,
+      bootId: "abc",
+    });
+    expect(parse(wire).killSwitch).toBeNull();
+    expect(
+      parse({ ...wire, kill_switch: { ...ks, state: "reconnecting", restart_reason: "settings" } })
+        .killSwitch?.restartReason,
+    ).toBe("settings");
+  });
+
+  it.each([
+    ["unknown state", { state: "weird" }],
+    ["unknown reason", { restart_reason: "moon" }],
+    ["non-boolean accepting_writes", { accepting_writes: "yes" }],
+    ["missing boot id", { boot_id: undefined }],
+  ])("a malformed kill switch fails closed: %s", async (_, over) => {
+    const { parseNetwork: parse } = await import("./api");
+    const ks = {
+      level: "strict",
+      interface: null,
+      level_from: "default",
+      bound_to: "utun6",
+      state: "bound",
+      listen_port: null,
+      accepting_writes: true,
+      restart_reason: null,
+      boot_id: "abc",
+      ...over,
+    };
+    expect(() => parse({ ...wire, kill_switch: ks })).toThrow("unexpected kill switch");
+  });
+
+  it("parses settings and rejects unknown levels", async () => {
+    const { parseSettings } = await import("./api");
+    const body = {
+      vpn: "strict",
+      vpn_interface: null,
+      vpn_from: "env",
+      blocklist: false,
+      blocklist_source: null,
+      blocklist_from: "file",
+      blocklist_status: { source: null, updated_at: null, ranges: null, in_use: false, fetching: false, error: null },
+      listen_port: 51413,
+      restart_pending: false,
+      boot_id: "b1",
+    };
+    expect(parseSettings(body)).toMatchObject({ vpn: "strict", vpnFrom: "env", blocklist: false, listenPort: 51413 });
+    expect(() => parseSettings({ ...body, vpn: "auto" })).toThrow("unexpected settings");
+    expect(() => parseSettings({ ...body, blocklist_status: null })).toThrow("unexpected settings");
+    expect(() => parseSettings({ ...body, boot_id: 5 })).toThrow("unexpected settings");
+  });
+});
+
+describe("network store while stash restarts", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("re-checks every 2 s while reconnecting, then back to the interval", async () => {
+    const ks = (state: "reconnecting" | "bound") => ({
+      level: "strict" as const,
+      interface: null,
+      levelFrom: "default" as const,
+      boundTo: "utun6",
+      state,
+      restartReason: "vpn" as const,
+      listenPort: null,
+      acceptingWrites: state !== "reconnecting",
+      bootId: state,
+    });
+    const fetchReport = vi
+      .fn<NetworkDeps["fetchReport"]>()
+      .mockImplementationOnce(async () => ({ ...report(Date.now()), killSwitch: ks("reconnecting") }))
+      .mockImplementation(async () => ({ ...report(Date.now()), killSwitch: ks("bound") }));
+    const store = createNetworkStore({
+      fetchReport,
+      intervalMs: 60_000,
+      isHidden: () => false,
+      now: () => Date.now(),
+    });
+    const stop = store.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchReport).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(fetchReport).toHaveBeenCalledTimes(2);
+    expect(store.getSnapshot().report?.killSwitch?.state).toBe("bound");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(fetchReport).toHaveBeenCalledTimes(2);
+    stop();
+  });
+});
+
+describe("restart failed", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("does not keep re-checking every 2 s when stash can't restart", async () => {
+    const fetchReport = vi.fn<NetworkDeps["fetchReport"]>(async () => ({
+      ...report(Date.now()),
+      killSwitch: {
+        level: "strict",
+        interface: null,
+        levelFrom: "default",
+        boundTo: null,
+        state: "restart_failed",
+        restartReason: "vpn",
+        listenPort: null,
+        acceptingWrites: false,
+        bootId: "b",
+      },
+    }));
+    const store = createNetworkStore({ fetchReport, intervalMs: 60_000, isHidden: () => false, now: () => Date.now() });
+    const stop = store.start();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(fetchReport).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("parses restart_failed", async () => {
+    const { parseNetwork: parse } = await import("./api");
+    const ks = {
+      level: "strict", interface: null, level_from: "default", bound_to: null,
+      state: "restart_failed", listen_port: null, accepting_writes: false,
+      restart_reason: "vpn", boot_id: "b",
+    };
+    expect(parse({ ...wire, kill_switch: ks }).killSwitch?.state).toBe("restart_failed");
   });
 });

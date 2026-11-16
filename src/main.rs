@@ -2,6 +2,7 @@
 //! One binary: torrent engine (librqbit) + HTTP API + web UI.
 
 mod network;
+mod privacy;
 mod security;
 mod web;
 
@@ -16,32 +17,77 @@ use anyhow::Context;
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, RawQuery, State},
+    extract::{FromRef, Path, RawQuery, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use librqbit::{
-    AddTorrent, AddTorrentOptions, Api, ApiError, Session, SessionOptions,
-    SessionPersistenceConfig,
+    AddTorrent, AddTorrentOptions, Api, ApiError, Session,
     api::{ApiTorrentListOpts, TorrentIdOrHash},
 };
+use privacy::{Binding, Privacy};
 use serde::Deserialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt};
 
 /// librqbit's ApiError already carries a status code and serializes to JSON.
-struct AppError(ApiError);
+enum AppError {
+    Api(ApiError),
+    /// The kill switch has stopped the session; writes wait for the restart.
+    Unavailable,
+    /// Strict kill switch with no VPN: adding can't find peers.
+    NoVpn,
+}
 
 impl From<ApiError> for AppError {
     fn from(e: ApiError) -> Self {
-        Self(e)
+        Self::Api(e)
+    }
+}
+
+impl From<privacy::Unavailable> for AppError {
+    fn from(_: privacy::Unavailable) -> Self {
+        Self::Unavailable
     }
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        (self.0.status(), Json(&self.0)).into_response()
+        match self {
+            Self::Api(e) => (e.status(), Json(&e)).into_response(),
+            Self::Unavailable => privacy::Unavailable.into_response(),
+            Self::NoVpn => (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "human_readable": "No VPN is connected, so the kill switch has stopped all torrent traffic. Connect your VPN, then add this again."
+                })),
+            )
+                .into_response(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct AppState {
+    api: Arc<Api>,
+    probe: Arc<network::NetworkProbe>,
+    privacy: Arc<Privacy>,
+}
+
+impl FromRef<AppState> for Arc<Api> {
+    fn from_ref(s: &AppState) -> Self {
+        s.api.clone()
+    }
+}
+impl FromRef<AppState> for Arc<network::NetworkProbe> {
+    fn from_ref(s: &AppState) -> Self {
+        s.probe.clone()
+    }
+}
+impl FromRef<AppState> for Arc<Privacy> {
+    fn from_ref(s: &AppState) -> Self {
+        s.privacy.clone()
     }
 }
 
@@ -67,25 +113,131 @@ async fn main() -> anyhow::Result<()> {
         &std::env::var("STASH_ALLOWED_HOSTS").unwrap_or_default(),
     ));
 
-    let session = Session::new_with_opts(
-        dir.clone(),
-        SessionOptions {
-            // Remember transfers across restarts, and skip re-hashing on resume.
-            // Kept outside the download dir so torrent content can't overwrite it.
-            persistence: Some(SessionPersistenceConfig::Json {
-                folder: Some(session_dir),
-            }),
-            fastresume: true,
-            ..Default::default()
-        },
-    )
-    .await
-    .context("error creating torrent session")?;
+    let env = |k: &str| std::env::var(k).ok();
+    let settings_path = state_dir.join("settings.json");
+    let settings = privacy::Settings::resolve(&env, &privacy::SettingsFile::load(&settings_path))?;
+    let base = privacy::SessionBase {
+        session_dir,
+        state_dir: state_dir.canonicalize()?,
+    };
+    let blocklist = privacy::Blocklist::new(&state_dir)?;
+
+    // Decide the binding before the first session, so traffic never starts
+    // on the wrong interface.
+    let mode = settings.vpn.clone();
+    let mut binding = tokio::task::spawn_blocking(move || {
+        privacy::desired_binding(&mode, privacy::route_now().as_ref(), &privacy::if_index)
+    })
+    .await?;
+    if settings.upnp && settings.vpn.level != privacy::Level::Off {
+        tracing::warn!(
+            "STASH_UPNP is ignored while the kill switch is on (it would open a port on your router)"
+        );
+    }
+    // Only a list fetched from the current source; never one left over from
+    // another source.
+    let mut list_url = (settings.blocklist != privacy::BlocklistSource::Off)
+        .then(|| blocklist.file_url_for(&settings.blocklist))
+        .flatten();
+    let mut failed_binding = None;
+    // Each attempt gets its own cancellation token: librqbit starts the
+    // listener and DHT before it loads the blocklist, and does not stop them
+    // if a later step fails. Cancel them before trying again.
+    let open_session = |binding: &Binding, list: Option<String>| {
+        let token = tokio_util::sync::CancellationToken::new();
+        let mut opts = privacy::session_options(&base, &settings, binding, list);
+        opts.cancellation_token = Some(token.clone());
+        let attempt = Session::new_with_opts(dir.clone(), opts);
+        async move {
+            let r = attempt.await;
+            if r.is_err() {
+                token.cancel();
+                // Give the half-started tasks a moment to release their sockets.
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            }
+            r
+        }
+    };
+    let mut result = open_session(&binding, list_url.clone()).await;
+    if let Err(e) = &result {
+        if is_addr_in_use(e) && settings.listen_port.is_some() {
+            anyhow::bail!(
+                "STASH_LISTEN_PORT={} is already in use by another program; pick another port",
+                settings.listen_port.unwrap_or_default()
+            );
+        }
+        if list_url.is_some() {
+            // A list librqbit rejects must not keep stash from starting.
+            tracing::warn!(error = format!("{e:#}"), "starting without the blocklist");
+            list_url = None;
+            result = open_session(&binding, None).await;
+        }
+    }
+    let session = match result {
+        Ok(s) => s,
+        Err(e) if matches!(binding, Binding::Bound { .. }) => {
+            // The tunnel vanished since the probe, or (Linux < 5.7) binding
+            // needs CAP_NET_RAW. Fail closed, and remember the binding so the
+            // supervisor doesn't restart into the same failure forever.
+            tracing::error!(
+                error = format!("{e:#}"),
+                "could not start the torrent session bound to the VPN (see error for the cause); torrents are stopped (STASH_VPN={:?})",
+                settings.vpn.level
+            );
+            failed_binding = Some(binding.clone());
+            binding = Binding::Blocked;
+            open_session(&binding, None)
+                .await
+                .context("error creating torrent session")?
+        }
+        Err(e) => return Err(e.context("error creating torrent session")),
+    };
+    blocklist.mark_in_use(list_url.is_some() && !matches!(binding, Binding::Blocked));
+    match &binding {
+        Binding::Bound { name, .. } => {
+            tracing::info!(interface = %name, "kill switch: torrent traffic uses {name} only")
+        }
+        Binding::Blocked => tracing::warn!(
+            "STASH_VPN=strict: no VPN tunnel, torrents are stopped. Connect your VPN, or set STASH_VPN=warn or off"
+        ),
+        Binding::Unbound if settings.vpn.level == privacy::Level::Warn => {
+            tracing::warn!("STASH_VPN=warn: no VPN tunnel, torrents use your normal connection")
+        }
+        Binding::Unbound => {}
+    }
 
     let api = Arc::new(Api::new(session, None));
     let probe = Arc::new(network::NetworkProbe::new(network::ProbeConfig::public(
         network::lookup_enabled_from(std::env::var("STASH_IP_LOOKUP").ok().as_deref()),
     ))?);
+    let privacy = Arc::new(Privacy::new(
+        settings,
+        settings_path,
+        blocklist,
+        binding.clone(),
+        failed_binding,
+    ));
+    if let Some(via) = privacy.download_route() {
+        let p = privacy.clone();
+        tokio::spawn(async move {
+            p.blocklist
+                .refresh(&p.settings.blocklist, false, via.as_deref())
+                .await
+        });
+    }
+    // The supervisor is the kill switch: if it ever dies, stash must not keep
+    // running without it.
+    let supervisor = tokio::spawn(privacy::supervise(privacy.clone(), api.clone()));
+    tokio::spawn(async move {
+        let outcome = supervisor.await;
+        tracing::error!(?outcome, "the kill switch supervisor stopped; exiting");
+        std::process::exit(70);
+    });
+    let state = AppState {
+        api,
+        probe,
+        privacy,
+    };
 
     web::warn_if_unbuilt::<web::Dist>();
     let api_routes = Router::new()
@@ -94,12 +246,17 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/transfers/{id}/pause", post(pause))
         .route("/api/transfers/{id}/start", post(start))
         .route("/api/transfers/{id}/files/{file_id}", get(stream))
-        .with_state(api)
-        .merge(
-            Router::new()
-                .route("/api/network", get(network::handler))
-                .with_state(probe),
-        );
+        .route("/api/network", get(network::handler))
+        .route(
+            "/api/settings",
+            get(privacy::get_settings).put(privacy::put_settings),
+        )
+        .route("/api/settings/restart", post(privacy::post_restart))
+        .route(
+            "/api/blocklist/refresh",
+            post(privacy::post_blocklist_refresh),
+        )
+        .with_state(state);
     // The web UI is the fallback; the guard goes last so it wraps everything.
     let app = web::attach::<web::Dist, ()>(api_routes)
         .layer(middleware::from_fn_with_state(guard_cfg, security::guard));
@@ -111,6 +268,14 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+fn is_addr_in_use(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        c.downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::AddrInUse)
+            || c.to_string().contains("Address already in use")
+    })
 }
 
 /// Creates the state dir, refuses layouts where torrent content could write
@@ -179,8 +344,13 @@ struct AddRequest {
 
 async fn add(
     State(api): State<Arc<Api>>,
+    State(privacy): State<Arc<Privacy>>,
     Json(req): Json<AddRequest>,
 ) -> Result<impl IntoResponse> {
+    let _writing = privacy.write_guard().await?;
+    if !privacy.can_add() {
+        return Err(AppError::NoVpn);
+    }
     let opts = AddTorrentOptions {
         overwrite: true,
         ..Default::default()
@@ -200,23 +370,29 @@ async fn details(
 
 async fn pause(
     State(api): State<Arc<Api>>,
+    State(privacy): State<Arc<Privacy>>,
     Path(id): Path<TorrentIdOrHash>,
 ) -> Result<impl IntoResponse> {
+    let _writing = privacy.write_guard().await?;
     Ok(Json(api.api_torrent_action_pause(id).await?))
 }
 
 async fn start(
     State(api): State<Arc<Api>>,
+    State(privacy): State<Arc<Privacy>>,
     Path(id): Path<TorrentIdOrHash>,
 ) -> Result<impl IntoResponse> {
+    let _writing = privacy.write_guard().await?;
     Ok(Json(api.api_torrent_action_start(id).await?))
 }
 
 /// Removes the transfer and its files from disk.
 async fn delete(
     State(api): State<Arc<Api>>,
+    State(privacy): State<Arc<Privacy>>,
     Path(id): Path<TorrentIdOrHash>,
 ) -> Result<impl IntoResponse> {
+    let _writing = privacy.write_guard().await?;
     Ok(Json(api.api_torrent_action_delete(id).await?))
 }
 

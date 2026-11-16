@@ -2800,6 +2800,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "flate2",
+ "libc",
  "librqbit",
  "network-interface",
  "reqwest",

@@ -37,7 +37,9 @@ vi.mock("../lib/network", async (orig) => {
   };
 });
 
-const { NetworkChip, NetworkPanel } = await import("./NetworkStatus");
+const { NetworkChip, NetworkPanel, NetworkSummary, PAUSED_REASON, killLine, pausedReason, writesPaused } = await import(
+  "./NetworkStatus"
+);
 
 function set(snap: Partial<NetworkSnapshot>) {
   act(() => {
@@ -71,6 +73,7 @@ const routed = (over: Partial<Routed> = {}): Routed => ({
 
 const report = (over: Partial<NetworkReport> = {}): NetworkReport => ({
   verdict: "tunnel",
+  killSwitch: null,
   checkedAt: now(),
   lookupEnabled: true,
   ipv4: routed(),
@@ -106,22 +109,22 @@ afterEach(() => {
 
 describe("NetworkChip", () => {
   it.each([
-    [{ loading: true }, "Checking", /Checking the network/],
+    [{ loading: true }, "Checking", /Checking: finding out/],
     [{ report: report() }, "VPN tunnel", /looks like a VPN tunnel/],
-    [{ report: report({ verdict: "exposed" }) }, "No VPN", /No VPN tunnel/],
+    [{ report: report({ verdict: "exposed" }) }, "No VPN", /no VPN tunnel/i],
     [
       { report: report({ verdict: "offline" }) },
       "Offline",
       /no internet route/,
     ],
-    [{ report: report(), error: "Can't reach stash" }, "Unknown", /unknown/],
-    [{ report: report(), receivedAt: Date.now() - 3_600_000 }, "Unknown", /unknown/],
+    [{ report: report(), error: "Can't reach stash" }, "Unknown", /status unknown/],
+    [{ report: report(), receivedAt: Date.now() - 3_600_000 }, "Unknown", /status unknown/],
   ] as const)("%o shows %s", (snap, word, name) => {
     renderAt(<NetworkChip />);
     set(snap);
     const link = screen.getByRole("link", { name });
     expect(link).toHaveTextContent(word);
-    expect(link).toHaveAttribute("href", "/transfers#network");
+    expect(link).toHaveAttribute("href", "/privacy");
     expect(link).not.toHaveTextContent("185.1.2.3");
   });
 });
@@ -220,7 +223,7 @@ describe("NetworkPanel", () => {
     set({ report: report(), refreshing: true });
     expect(screen.getByRole("button", { name: "Checking…" })).toBeDisabled();
     set({ report: report({ verdict: "exposed" }) });
-    expect(screen.getByRole("status")).toHaveTextContent("No VPN tunnel");
+    expect(screen.getByRole("status")).toHaveTextContent(/no VPN tunnel/i);
   });
 
   it("freshens an old report on mount", () => {
@@ -228,12 +231,6 @@ describe("NetworkPanel", () => {
     expect(state.checkIfOlder).toHaveBeenCalledWith(30_000);
   });
 
-  it("the #network hash scrolls to and focuses the heading", () => {
-    renderAt(<NetworkPanel />, "/transfers#network");
-    set({ report: report() });
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
-    expect(screen.getByRole("heading", { level: 2 })).toHaveFocus();
-  });
   it("a stale report hides the verdict and the details", async () => {
     renderAt(<NetworkPanel />);
     set({ report: report() });
@@ -253,15 +250,102 @@ describe("NetworkPanel", () => {
     set({ report: report() });
     expect(screen.getByRole("status")).toHaveTextContent("");
     set({ report: report({ verdict: "exposed" }) });
-    expect(screen.getByRole("status")).toHaveTextContent("No VPN tunnel");
+    expect(screen.getByRole("status")).toHaveTextContent(/no VPN tunnel/i);
   });
 
-  it("scrolls the section (which has the scroll margin), not the heading", () => {
-    const calls: Element[] = [];
-    Element.prototype.scrollIntoView = function (this: Element) {
-      calls.push(this);
-    };
-    renderAt(<NetworkPanel />, "/transfers#network");
-    expect(calls[0]?.id).toBe("network");
+});
+
+describe("kill switch states", () => {
+  const ks = (state: "bound" | "blocked" | "reconnecting" | "exposed" | "off") => ({
+    level: "strict" as const,
+    interface: null,
+    levelFrom: "default" as const,
+    boundTo: state === "bound" ? "utun6" : null,
+    state,
+    restartReason: state === "reconnecting" ? ("vpn" as const) : null,
+    listenPort: null,
+    acceptingWrites: state !== "reconnecting",
+    bootId: "b1",
+  });
+
+  it.each([
+    ["bound", "VPN only", /torrents use utun6/],
+    ["blocked", "Stopped", /kill switch has stopped torrents/],
+    ["reconnecting", "Reconnecting", /torrents are stopped for a moment/],
+    ["exposed", "No VPN", /normal connection/],
+  ] as const)("%s shows %s", (state, word, name) => {
+    renderAt(<NetworkChip />);
+    set({ report: report({ killSwitch: ks(state) }) });
+    const link = screen.getByRole("link", { name });
+    expect(link).toHaveTextContent(word);
+  });
+
+  it("off falls back to the general verdict", () => {
+    renderAt(<NetworkChip />);
+    set({ report: report({ killSwitch: ks("off") }) });
+    expect(screen.getByRole("link")).toHaveTextContent("VPN tunnel");
+  });
+
+  it("the signal path is cut when the kill switch blocks traffic", async () => {
+    const { SignalPath } = await import("./SignalPath");
+    const { container, unmount } = render(<SignalPath report={report({ killSwitch: ks("blocked") })} />);
+    expect(container.querySelector(".path--cut")).not.toBeNull();
+    expect(screen.getByText("Nothing")).toBeInTheDocument();
+    unmount();
+    render(<SignalPath report={report({ killSwitch: ks("bound"), ipv4: routed({ iface: "utun6" }) })} />);
+    expect(screen.getByText("utun6")).toBeInTheDocument();
+    expect(screen.getByText("185.1.2.3 · NL")).toBeInTheDocument();
+  });
+  it("a settings restart says so, not 'the VPN changed'", () => {
+    renderAt(<NetworkChip />);
+    set({ report: report({ killSwitch: { ...ks("reconnecting"), restartReason: "settings" } }) });
+    const link = screen.getByRole("link", { name: /Restarting: applying new settings/ });
+    expect(link).toHaveTextContent("Restarting");
+    expect(killLine({ ...ks("reconnecting"), restartReason: "settings" })).toMatch(/Applying new settings/);
+    expect(killLine(ks("reconnecting"))).toMatch(/The VPN changed/);
+  });
+
+  it("warn mode says torrents continue on the normal connection", () => {
+    expect(killLine({ ...ks("bound"), level: "warn" })).toMatch(/continue on your normal connection/);
+    expect(killLine(ks("bound"))).toMatch(/they stop at once/);
+  });
+
+  it("the summary only shows the paused notice for a fresh report", () => {
+    renderAt(<NetworkSummary />);
+    set({ report: report({ killSwitch: ks("reconnecting") }) });
+    expect(screen.getByRole("status")).toHaveTextContent(PAUSED_REASON);
+    set({ report: report({ killSwitch: ks("reconnecting") }), error: "Failed to fetch" });
+    expect(screen.getByRole("status")).toHaveTextContent("");
+    expect(writesPaused({ report: report({ killSwitch: ks("bound") }), error: null, loading: false, refreshing: false, receivedAt: Date.now() }, Date.now())).toBe(false);
+  });
+
+  it("bound: never shows an IPv6 address torrents can't use", async () => {
+    const { SignalPath } = await import("./SignalPath");
+    render(
+      <SignalPath
+        report={report({
+          killSwitch: ks("bound"),
+          ipv4: routed({ publicIp: null, country: null, error: "Lookup timed out" }),
+          ipv6: routed({ iface: "en0", tunnel: false, localIp: "2001:db8::2", publicIp: "2001:db8::2", country: "US" }),
+        })}
+      />,
+    );
+    expect(screen.queryByText(/2001:db8::2/)).toBeNull();
+    expect(screen.getByText("The VPN's address")).toBeInTheDocument();
+  });
+  it("a failed self-restart is its own state, not 'no VPN'", async () => {
+    renderAt(<NetworkChip />);
+    const failed = { ...ks("reconnecting"), state: "restart_failed" as const };
+    set({ report: report({ killSwitch: failed }) });
+    const link = screen.getByRole("link", { name: /Restart failed: .*Restart stash by hand/ });
+    expect(link).toHaveTextContent("Restart failed");
+    expect(link.textContent).not.toMatch(/VPN/);
+    expect(killLine(failed)).toMatch(/restart stash by hand/);
+    const snap = { report: report({ killSwitch: failed }), error: null, loading: false, refreshing: false, receivedAt: Date.now() };
+    expect(pausedReason(snap, Date.now())).toMatch(/Restart it by hand/);
+    const { SignalPath } = await import("./SignalPath");
+    render(<SignalPath report={report({ killSwitch: failed })} />);
+    expect(screen.getAllByText("Restart failed").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/No VPN, traffic stopped/)).toBeNull();
   });
 });

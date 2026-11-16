@@ -6,8 +6,8 @@ import {
   ShieldOff,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { Link, useLocation } from "react-router";
-import type { Family, NetworkReport } from "../lib/api";
+import { Link } from "react-router";
+import type { Family, KillSwitch, NetworkReport } from "../lib/api";
 import {
   NETWORK_INTERVAL_MS,
   isStale,
@@ -24,43 +24,78 @@ interface Summary {
   word: string;
   /** Sentence used for the accessible name and announcements. */
   sentence: string;
+  /** The part after the word, for one-line summaries. */
+  detail: string;
 }
+
+const sum = (tone: Tone, word: string, detail: string): Summary => ({
+  tone,
+  word,
+  detail,
+  sentence: `${word}: ${detail}`,
+});
 
 export function summarize(s: NetworkSnapshot, now: number): Summary {
   if (!s.report) {
     return s.loading
-      ? { tone: "muted", word: "Checking", sentence: "Checking the network" }
-      : { tone: "muted", word: "Unknown", sentence: "Network status unknown" };
+      ? sum("muted", "Checking", "finding out what peers can see")
+      : sum("muted", "Unknown", "network status unknown");
   }
   if (isStale(s, NETWORK_INTERVAL_MS, now)) {
-    return {
-      tone: "muted",
-      word: "Unknown",
-      sentence: "Network status unknown: the last check failed or is old",
-    };
+    return sum("muted", "Unknown", "network status unknown, the last check failed or is old");
+  }
+  const ks = s.report.killSwitch;
+  switch (ks?.state) {
+    case "reconnecting":
+      return ks.restartReason === "settings"
+        ? sum("muted", "Restarting", "applying new settings, torrents are stopped for a moment")
+        : sum("muted", "Reconnecting", "the VPN changed, torrents are stopped for a moment");
+    case "blocked":
+      return sum("muted", "Stopped", "no VPN, so the kill switch has stopped torrents");
+    case "restart_failed":
+      return sum("error", "Restart failed", "stash couldn't restart itself, torrents are stopped. Restart stash by hand");
+    case "bound":
+      return sum("ready", "VPN only", `torrents use ${ks.boundTo ?? "the VPN"} and nothing else`);
+    case "exposed":
+      return sum("error", "No VPN", "torrents use your normal connection and peers see your IP");
+    default:
+      break;
   }
   switch (s.report.verdict) {
     case "tunnel":
-      return {
-        tone: "ready",
-        word: "VPN tunnel",
-        sentence: "Traffic leaves through what looks like a VPN tunnel",
-      };
+      return sum("ready", "VPN tunnel", "traffic leaves through what looks like a VPN tunnel");
     case "exposed":
-      return {
-        tone: "error",
-        word: "No VPN",
-        sentence: "No VPN tunnel: peers see this connection's IP",
-      };
+      return sum("error", "No VPN", "no VPN tunnel, peers see this connection's IP");
     case "offline":
-      return {
-        tone: "muted",
-        word: "Offline",
-        sentence: "Offline: stash has no internet route",
-      };
+      return sum("muted", "Offline", "stash has no internet route");
   }
 }
 
+/** True while add/start/pause/delete would be refused (stash restarting).
+ * Only from a fresh report, like everything else that claims a state. */
+export function writesPaused(s: NetworkSnapshot, now: number): boolean {
+  const ks = s.report?.killSwitch;
+  return !!ks && !ks.acceptingWrites && !isStale(s, NETWORK_INTERVAL_MS, now);
+}
+
+/** Live: re-renders with the network store. Null when actions work. */
+export function useWritesPaused(): string | null {
+  return pausedReason(useNetwork(), Date.now());
+}
+
+export const PAUSED_REASON =
+  "stash is restarting. Adding, pausing and deleting work again in a moment.";
+
+export const RESTART_FAILED_REASON =
+  "stash couldn't restart itself. Restart it by hand to add, pause or delete transfers.";
+
+/** The reason actions are unavailable right now, or null. */
+export function pausedReason(s: NetworkSnapshot, now: number): string | null {
+  if (!writesPaused(s, now)) return null;
+  return s.report?.killSwitch?.state === "restart_failed"
+    ? RESTART_FAILED_REASON
+    : PAUSED_REASON;
+}
 
 function withCountry(f: Family): string | null {
   if (!f.route || !f.publicIp) return null;
@@ -85,6 +120,31 @@ function headline(r: NetworkReport): string {
   }
 }
 
+/** One line about the kill switch, for the panel. */
+export function killLine(ks: KillSwitch | null): string | null {
+  if (!ks) return null;
+  switch (ks.state) {
+    case "off":
+      return "Kill switch is off: torrents use whatever connection this machine uses.";
+    case "bound":
+      return ks.level === "warn"
+        ? `Torrents use ${ks.boundTo ?? "the VPN"} only. Warn mode: if the VPN drops, torrents pause, then continue on your normal connection.`
+        : `Kill switch on: torrents use ${ks.boundTo ?? "the VPN"} only. If the VPN drops, they stop at once.`;
+    case "blocked":
+      return ks.level === "warn"
+        ? "Torrents are stopped."
+        : "Kill switch: no VPN, so torrents are stopped. Connect your VPN and stash picks it up within seconds.";
+    case "reconnecting":
+      return ks.restartReason === "settings"
+        ? "Applying new settings. Torrents are stopped and stash restarts in a moment."
+        : "The VPN changed. Torrents are stopped and stash restarts in a moment.";
+    case "exposed":
+      return "Warn mode: no VPN, so torrents are running on your normal connection.";
+    case "restart_failed":
+      return "stash couldn't restart itself (was it updated while running?). Torrents stay stopped until you restart stash by hand.";
+  }
+}
+
 const clock = (unix: number) =>
   new Date(unix * 1000).toLocaleTimeString([], {
     hour: "2-digit",
@@ -98,7 +158,7 @@ export function NetworkChip() {
   const Icon = s.tone === "error" ? ShieldOff : Shield;
   return (
     <Link
-      to="/transfers#network"
+      to="/privacy"
       className={`net-chip status--${s.tone === "muted" ? "checking" : s.tone}`}
       aria-label={`Network: ${s.sentence}. View details`}
       title={`Network: ${s.word}`}
@@ -156,12 +216,9 @@ function FamilyRow({
   );
 }
 
-/** Full status at the top of Transfers. `id="network"` is the chip's target. */
+/** Full status on the Privacy page. */
 export function NetworkPanel() {
   const snap = useNetwork();
-  const location = useLocation();
-  const sectionRef = useRef<HTMLElement>(null);
-  const headingRef = useRef<HTMLHeadingElement>(null);
   const [open, setOpen] = useState(false);
   const [announce, setAnnounce] = useState("");
   const prevVerdict = useRef<string | null>(null);
@@ -174,18 +231,6 @@ export function NetworkPanel() {
   // The rail chip polls slowly; opening the panel freshens a report older than 30 s.
   useEffect(() => network.checkIfOlder(30_000), []);
 
-  useEffect(() => {
-    if (location.hash !== "#network") return;
-    const reduce = window.matchMedia?.(
-      "(prefers-reduced-motion: reduce)",
-    ).matches;
-    // Scroll the section: it carries the scroll margin for the sticky top bar.
-    sectionRef.current?.scrollIntoView({
-      block: "start",
-      behavior: reduce ? "auto" : "smooth",
-    });
-    headingRef.current?.focus({ preventScroll: true });
-  }, [location.hash, location.key]);
 
   // Announce verdict changes after the first load, and the result of "Check again".
   useEffect(() => {
@@ -208,7 +253,6 @@ export function NetworkPanel() {
       className="net-panel"
       id="network"
       aria-labelledby="net-heading"
-      ref={sectionRef}
     >
       <div className="net-head">
         <span
@@ -221,8 +265,6 @@ export function NetworkPanel() {
           <h2
             id="net-heading"
             className="net-title"
-            ref={headingRef}
-            tabIndex={-1}
           >
             {fresh
               ? headline(fresh)
@@ -242,7 +284,8 @@ export function NetworkPanel() {
             {r &&
               !r.lookupEnabled &&
               "Public IP lookup is off (STASH_IP_LOOKUP). "}
-            If the VPN drops, stash keeps running and peers see your normal IP.
+            {killLine(r?.killSwitch ?? null) ??
+              "If the VPN drops, stash keeps running and peers see your normal IP."}
           </p>
         </div>
         <div className="net-actions">
@@ -294,3 +337,35 @@ export function NetworkPanel() {
   );
 }
 
+/** One line at the top of Transfers; the full panel lives on Privacy. */
+export function NetworkSummary() {
+  const snap = useNetwork();
+  const now = Date.now();
+  const s = summarize(snap, now);
+  const paused = pausedReason(snap, now);
+  return (
+    <>
+      <Link
+        to="/privacy"
+        className="net-summary"
+        aria-label={`Network: ${s.sentence}. Open Privacy`}
+      >
+        <span
+          className={`net-badge status--${s.tone === "muted" ? "checking" : s.tone}`}
+        >
+          <span className="status-dot" aria-hidden="true" />
+          {s.word}
+        </span>
+        <span className="net-summary-text">{s.detail}</span>
+        <ChevronRight aria-hidden="true" />
+      </Link>
+      {/* Always in the DOM so screen readers announce the text when it appears. */}
+      <div
+        className={paused ? "banner banner--quiet" : "visually-hidden"}
+        role="status"
+      >
+        {paused ?? ""}
+      </div>
+    </>
+  );
+}

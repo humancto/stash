@@ -26,11 +26,25 @@ const netBody = {
   ipv6: { route: false },
 };
 
+const settingsBody = {
+  vpn: "strict",
+  vpn_interface: null,
+  vpn_from: "default",
+  blocklist: true,
+  blocklist_source: "https://raw.githubusercontent.com/Naunter/BT_BlockLists/master/bt_blocklists.gz",
+  blocklist_from: "default",
+  blocklist_status: { source: null, updated_at: 1794809015, ranges: 595916, in_use: true, fetching: false, error: null },
+  listen_port: null,
+  restart_pending: false,
+  boot_id: "b1",
+};
+
 /** Answers by URL, so the network poller doesn't get the transfers body. */
 const respond = (transfers: unknown = body) =>
   vi.fn(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    return new Response(JSON.stringify(url.startsWith("/api/network") ? netBody : transfers));
+    const out = url.startsWith("/api/network") ? netBody : url.startsWith("/api/settings") ? settingsBody : transfers;
+    return new Response(JSON.stringify(out));
   });
 
 describe("routing", () => {
@@ -55,19 +69,24 @@ describe("routing", () => {
     expect(await screen.findByRole("heading", { name: "Files" })).toBeInTheDocument();
   });
 
-  it("the rail chip shows the network verdict and links to the panel", async () => {
+  it("the rail chip shows the network verdict and opens Privacy", async () => {
     vi.stubGlobal("fetch", respond());
     const router = createMemoryRouter(routes, { initialEntries: ["/files"] });
     render(<RouterProvider router={router} />);
-    const chip = await screen.findByRole("link", { name: /Network: No VPN tunnel/ });
-    expect(chip).toHaveAttribute("href", "/transfers#network");
+    const chip = await screen.findByRole("link", { name: /Network: No VPN: no VPN tunnel/ });
+    expect(chip).toHaveAttribute("href", "/privacy");
     expect(chip).toHaveTextContent("No VPN");
     expect(chip).not.toHaveTextContent("203.0.113.7");
-    const scroll = vi.fn();
-    Element.prototype.scrollIntoView = scroll;
     await userEvent.click(chip);
-    expect(await screen.findByRole("heading", { name: /Peers see 203\.0\.113\.7 \(US\)/ })).toHaveFocus();
-    expect(scroll).toHaveBeenCalled();
+    expect(await screen.findByRole("heading", { name: "Privacy", level: 1 })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /Peers see 203\.0\.113\.7 \(US\)/ })).toBeInTheDocument();
+    expect(await screen.findByRole("radio", { name: /Strict/ })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Use the blocklist" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText(/595,916 ranges/)).toBeInTheDocument();
+    const save = screen.getByRole("button", { name: "Save and restart" });
+    expect(save).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(screen.getByRole("radio", { name: /Warn/ }));
+    expect(save).not.toHaveAttribute("aria-disabled");
   });
 
   it("Escape on a deep-linked file page goes to Files", async () => {

@@ -1,4 +1,4 @@
-import { ArrowDownToLine, Clapperboard, Plus, Search } from "lucide-react";
+import { ArrowDownToLine, Clapperboard, Plus, Search, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { NavLink, Outlet, useLocation, useNavigate, useSearchParams } from "react-router";
 import { api } from "../lib/api";
@@ -6,7 +6,7 @@ import { handleNavKey } from "../lib/keys";
 import { transfers, useTransfers } from "../lib/store";
 import { network } from "../lib/network";
 import { Logo } from "./Logo";
-import { NetworkChip } from "./NetworkStatus";
+import { NetworkChip, useWritesPaused } from "./NetworkStatus";
 import { RoomContext, type Room } from "./room";
 
 function NavLinks({ active }: { active: number }) {
@@ -25,6 +25,10 @@ function NavLinks({ active }: { active: number }) {
           </span>
         )}
       </NavLink>
+      <NavLink to="/privacy" className="nav-link" data-rove-item>
+        <ShieldCheck aria-hidden="true" />
+        <span>Privacy</span>
+      </NavLink>
     </>
   );
 }
@@ -34,9 +38,14 @@ function AddMagnet() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
+  const writesPaused = useWritesPaused();
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (writesPaused) {
+      setError(writesPaused);
+      return;
+    }
     const value = url.trim();
     if (!value) {
       setError("Paste a magnet link or a .torrent URL first.");
@@ -73,7 +82,12 @@ function AddMagnet() {
         autoComplete="off"
         spellCheck={false}
       />
-      <button className="btn btn--primary" disabled={busy}>
+      <button
+        className="btn btn--primary"
+        disabled={busy}
+        aria-disabled={writesPaused ? true : undefined}
+        title={writesPaused ?? undefined}
+      >
         <Plus aria-hidden="true" />
         {busy ? "Adding…" : "Add"}
       </button>

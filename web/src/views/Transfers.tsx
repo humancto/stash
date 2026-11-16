@@ -2,7 +2,7 @@ import { ChevronDown, ChevronRight, Pause, Play } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { ConfirmDelete } from "../components/ConfirmDelete";
-import { NetworkPanel } from "../components/NetworkStatus";
+import { NetworkSummary, useWritesPaused } from "../components/NetworkStatus";
 import { Reel } from "../components/Reel";
 import { api, type Transfer } from "../lib/api";
 import { fileStatus } from "../lib/files";
@@ -58,7 +58,10 @@ function TransferRow({ t }: { t: Transfer }) {
     .map((f, fid) => ({ f, fid }))
     .filter(({ f }) => !f.attributes.padding && !f.attributes.hidden);
 
+  const writesPaused = useWritesPaused();
+
   async function toggle() {
+    if (writesPaused) return;
     setBusy(true);
     setError(null);
     try {
@@ -117,6 +120,8 @@ function TransferRow({ t }: { t: Transfer }) {
             onClick={toggle}
             data-rove-item
             disabled={busy || s?.state === "initializing"}
+            aria-disabled={writesPaused ? true : undefined}
+            title={writesPaused ?? undefined}
           >
             {paused ? (
               <Play aria-hidden="true" />
@@ -126,6 +131,7 @@ function TransferRow({ t }: { t: Transfer }) {
             {paused ? (s?.finished ? "Resume seeding" : "Resume") : "Pause"}
           </button>
           <ConfirmDelete
+            pausedReason={writesPaused ?? undefined}
             className="btn--sm"
             what={`“${name}”`}
             onConfirm={() => transfers.mutate(() => api.remove(t.id))}
@@ -172,7 +178,7 @@ export function Transfers() {
           )}
         </div>
       </div>
-      <NetworkPanel />
+      <NetworkSummary />
       {error && (
         <div className="banner" role="alert">
           <span>

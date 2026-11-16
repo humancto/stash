@@ -8,7 +8,10 @@ Ordered by priority. One item per branch and PR, reviewed by the matching expert
 - [x] **security-hardening**: (1) Serve only audio/video/subtitle MIME types inline; everything else `application/octet-stream` + `Content-Disposition: attachment`; `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` on file responses. (2) Reject unexpected `Host` headers (DNS rebinding) and require same-origin `Origin` on state-changing requests (CSRF). (3) `overwrite: false` by default and session state moved outside the download directory.
 - [x] **web-ui**: Replace `src/index.html` with a Vite + React + TS app in `web/`, embedded in the binary. Views: Files, Transfers, File page (player, actions rail, subtitles slot, media-info slot). Works on Mac, phone and TV. Own visual identity, not put.io's.
 - [x] **network-status**: Show what torrent peers see: the outbound interface for IPv4 and IPv6, whether it is a VPN tunnel, and the public IP and country. `GET /api/network`, plus a status chip in the rail and a panel on Transfers.
-- [ ] **network-privacy**: Fixed listen port over TCP + uTP, UPnP toggle, bind torrent traffic to a named interface (VPN kill switch), peer limit, all via env/config. Document VPN + port-forwarding setup.
+- [ ] **network-privacy**: Fixed listen port over TCP + uTP, UPnP toggle, bind torrent traffic to a named interface (VPN kill switch), peer limit, all via env/config. Document VPN + port-forwarding setup. Kill switch levels (strict / warn / off) and a peer IP blocklist (user request 2026-11-16).
+- [ ] **seeding-policy**: Stop seeding as soon as a download finishes, on by default (first-class rule; user request 2026-11-16). Optional ratio or time limit instead.
+- [ ] **file-delete**: Delete a single downloaded file (not the whole transfer) from the Files list and the file page: deselect it in the torrent so it is not downloaded again, remove it from disk, confirm first (user request 2026-11-16).
+- [ ] **vpn-port-forwarding**: NAT-PMP for Proton and similar VPNs: request and renew the forwarded port, listen on it, follow it when it changes.
 - [ ] **auth**: Access control before exposing beyond localhost (login or token), safe for LAN/Tailscale family use.
 
 ## P1: watch anything
@@ -21,7 +24,6 @@ Ordered by priority. One item per branch and PR, reviewed by the matching expert
 
 ## P2: polish
 
-- [ ] **seeding-policy**: Stop seeding at a ratio or after a time limit.
 - [ ] **thumbnails**: Generate and cache a frame per video for the Files list.
 - [ ] **watch-state**: Watched/unwatched, resume position, history.
 - [ ] **seedbox-deploy**: Docker image + gluetun/VPN compose file for running stash on a remote box.

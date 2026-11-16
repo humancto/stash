@@ -56,8 +56,37 @@ export type Family =
       error: string | null;
     };
 
+export type KillLevel = "strict" | "warn" | "off";
+export type KillState =
+  | "off"
+  | "bound"
+  | "blocked"
+  | "reconnecting"
+  | "exposed"
+  | "restart_failed";
+export type SettingFrom = "env" | "file" | "default";
+
+export interface KillSwitch {
+  level: KillLevel;
+  /** Only this interface counts as the VPN (STASH_VPN=<name>). */
+  interface: string | null;
+  levelFrom: SettingFrom;
+  boundTo: string | null;
+  state: KillState;
+  /** Why stash is stopped and about to restart, if it is. */
+  restartReason: RestartReason | null;
+  listenPort: number | null;
+  acceptingWrites: boolean;
+  /** Changes on every (re)start of the stash process. */
+  bootId: string;
+}
+
+export type RestartReason = "vpn" | "settings";
+
 export interface NetworkReport {
   verdict: Verdict;
+  /** Null when talking to a stash without the kill switch. */
+  killSwitch: KillSwitch | null;
   /** Unix seconds. */
   checkedAt: number;
   lookupEnabled: boolean;
@@ -158,6 +187,110 @@ export function parseTransferList(v: unknown): Transfer[] {
 }
 
 const VERDICTS: readonly Verdict[] = ["tunnel", "exposed", "offline"];
+const LEVELS: readonly KillLevel[] = ["strict", "warn", "off"];
+const KILL_STATES: readonly KillState[] = ["off", "bound", "blocked", "reconnecting", "exposed", "restart_failed"];
+const FROMS: readonly SettingFrom[] = ["env", "file", "default"];
+
+const REASONS: readonly RestartReason[] = ["vpn", "settings"];
+
+/** Absent (an older stash) → null. Present but malformed or unknown → an
+ * error, so the UI shows "Unknown" instead of guessing: failing open here
+ * could claim protection that isn't there. */
+function parseKillSwitch(v: unknown): KillSwitch | null {
+  if (v === undefined || v === null) return null;
+  const bad = () =>
+    new ApiError("The server sent an unexpected kill switch state.", 0);
+  if (!isObj(v)) throw bad();
+  const level = LEVELS.find((x) => x === v["level"]);
+  const state = KILL_STATES.find((x) => x === v["state"]);
+  const levelFrom = FROMS.find((x) => x === v["level_from"]);
+  const reasonRaw = v["restart_reason"];
+  const restartReason =
+    reasonRaw === null || reasonRaw === undefined
+      ? null
+      : (REASONS.find((x) => x === reasonRaw) ?? undefined);
+  const bootId = str(v["boot_id"]);
+  if (
+    !level ||
+    !state ||
+    !levelFrom ||
+    restartReason === undefined ||
+    typeof v["accepting_writes"] !== "boolean" ||
+    bootId === null
+  )
+    throw bad();
+  return {
+    level,
+    interface: str(v["interface"]),
+    levelFrom,
+    boundTo: str(v["bound_to"]),
+    state,
+    restartReason,
+    listenPort: num(v["listen_port"]),
+    acceptingWrites: v["accepting_writes"],
+    bootId,
+  };
+}
+
+export interface BlocklistStatus {
+  source: string | null;
+  updatedAt: number | null;
+  ranges: number | null;
+  inUse: boolean;
+  fetching: boolean;
+  error: string | null;
+}
+
+export interface Settings {
+  vpn: KillLevel;
+  vpnInterface: string | null;
+  vpnFrom: SettingFrom;
+  blocklist: boolean;
+  blocklistSource: string | null;
+  blocklistFrom: SettingFrom;
+  blocklistStatus: BlocklistStatus;
+  listenPort: number | null;
+  restartPending: boolean;
+  bootId: string;
+}
+
+export function parseSettings(v: unknown): Settings {
+  const bad = () => new ApiError("The server sent unexpected settings.", 0);
+  if (!isObj(v)) throw bad();
+  const vpn = LEVELS.find((x) => x === v["vpn"]);
+  const vpnFrom = FROMS.find((x) => x === v["vpn_from"]);
+  const blocklistFrom = FROMS.find((x) => x === v["blocklist_from"]);
+  const st = v["blocklist_status"];
+  const bootId = str(v["boot_id"]);
+  if (
+    !vpn ||
+    !vpnFrom ||
+    !blocklistFrom ||
+    typeof v["blocklist"] !== "boolean" ||
+    !isObj(st) ||
+    bootId === null
+  )
+    throw bad();
+  return {
+    vpn,
+    vpnInterface: str(v["vpn_interface"]),
+    vpnFrom,
+    blocklist: v["blocklist"],
+    blocklistSource: str(v["blocklist_source"]),
+    blocklistFrom,
+    blocklistStatus: {
+      source: str(st["source"]),
+      updatedAt: num(st["updated_at"]),
+      ranges: num(st["ranges"]),
+      inUse: st["in_use"] === true,
+      fetching: st["fetching"] === true,
+      error: str(st["error"]),
+    },
+    listenPort: num(v["listen_port"]),
+    restartPending: v["restart_pending"] === true,
+    bootId,
+  };
+}
 
 function parseFamily(v: unknown): Family {
   if (!isObj(v) || typeof v["route"] !== "boolean")
@@ -188,6 +321,7 @@ export function parseNetwork(v: unknown): NetworkReport {
     throw bad();
   return {
     verdict,
+    killSwitch: parseKillSwitch(v["kill_switch"]),
     checkedAt,
     lookupEnabled: v["lookup_enabled"],
     ipv4: parseFamily(v["ipv4"]),
@@ -250,6 +384,24 @@ export const api = {
   },
   async remove(id: number): Promise<void> {
     await request(`/api/transfers/${id}`, { method: "DELETE" });
+  },
+  async settings(signal?: AbortSignal): Promise<Settings> {
+    return parseSettings(
+      await request("/api/settings", signal ? { signal } : {}),
+    );
+  },
+  async saveSettings(update: { vpn?: KillLevel; blocklist?: boolean }): Promise<void> {
+    await request("/api/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(update),
+    });
+  },
+  async restart(): Promise<void> {
+    await request("/api/settings/restart", { method: "POST" });
+  },
+  async refreshBlocklist(): Promise<void> {
+    await request("/api/blocklist/refresh", { method: "POST" });
   },
   async network(
     opts: { refresh?: boolean; signal?: AbortSignal } = {},

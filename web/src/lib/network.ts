@@ -76,6 +76,18 @@ export function createNetworkStore(deps: NetworkDeps) {
       timer = setTimeout(() => void check(false), delay);
   };
 
+  /** While stash is restarting, check again soon so "Reconnecting" and
+   * the paused-actions notice don't outlive the restart by minutes. */
+  const settling = () => {
+    const ks = snapshot.report?.killSwitch;
+    return (
+      ks !== null &&
+      ks !== undefined &&
+      ks.state !== "restart_failed" &&
+      (ks.state === "reconnecting" || !ks.acceptingWrites)
+    );
+  };
+
   async function check(refresh: boolean): Promise<void> {
     clear();
     inflight?.abort();
@@ -112,7 +124,7 @@ export function createNetworkStore(deps: NetworkDeps) {
       if (inflight === ctrl) inflight = null;
       if (id === seq) {
         lastDone = deps.now();
-        schedule();
+        schedule(settling() ? SETTLE_MS : deps.intervalMs);
       }
     }
   }
@@ -155,6 +167,9 @@ export function createNetworkStore(deps: NetworkDeps) {
 }
 
 export type NetworkStore = ReturnType<typeof createNetworkStore>;
+
+/** Re-check delay while stash is restarting. */
+export const SETTLE_MS = 2000;
 
 export const NETWORK_INTERVAL_MS = 120_000;
 

@@ -1,10 +1,10 @@
 //! What torrent peers can see: which interface stash's traffic leaves on,
 //! whether that looks like a VPN tunnel, and the public IP and country.
 //!
-//! INVARIANT: the route probe matches peer traffic only while librqbit's
-//! `SessionOptions` has no `bind_device_name` and no SOCKS proxy (the kernel
-//! then picks the route per destination, exactly as for the probe socket).
-//! When network-privacy adds either, it must feed the same value in here.
+//! The probe reports where *general* traffic goes. Torrent traffic may be
+//! narrower: the kill switch (`privacy.rs`) binds it to the VPN tunnel or
+//! blocks it, and `/api/network` reports that binding separately as
+//! `kill_switch`.
 
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},
@@ -215,6 +215,17 @@ fn route_family(ifaces: &[NetworkInterface], targets: &[SocketAddr]) -> Option<R
         iface: iface_for(ifaces, source),
         consistent,
     })
+}
+
+/// Interface carrying general IPv4 traffic now, and whether two neutral
+/// targets agree on it. Used by the kill switch.
+pub fn v4_route_iface() -> Option<(Option<String>, bool)> {
+    let ifaces = NetworkInterface::show().unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "could not list network interfaces");
+        Vec::new()
+    });
+    let targets = ProbeConfig::public(false).v4_targets;
+    route_family(&ifaces, &targets).map(|r| (r.iface.map(|i| i.name), r.consistent))
 }
 
 pub struct ProbeConfig {
@@ -454,10 +465,13 @@ pub struct NetworkQuery {
 
 pub async fn handler(
     State(probe): State<Arc<NetworkProbe>>,
+    State(privacy): State<Arc<crate::privacy::Privacy>>,
     Query(q): Query<NetworkQuery>,
 ) -> Response {
     let force = matches!(q.refresh.as_deref(), Some("1" | "true"));
-    let mut res = Json(probe.report(force).await).into_response();
+    let mut body = serde_json::to_value(probe.report(force).await).unwrap_or_default();
+    body["kill_switch"] = serde_json::to_value(privacy.report()).unwrap_or_default();
+    let mut res = Json(body).into_response();
     res.headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     res
@@ -479,8 +493,8 @@ mod tests {
             Some(("185.1.2.3".parse().unwrap(), Some("NL".into())))
         );
         assert_eq!(
-            parse_trace("ip=2603:8000::1\r\nloc=us\r\n"),
-            Some(("2603:8000::1".parse().unwrap(), Some("US".into())))
+            parse_trace("ip=2001:db8::1\r\nloc=us\r\n"),
+            Some(("2001:db8::1".parse().unwrap(), Some("US".into())))
         );
         assert_eq!(
             parse_trace("ip=10.0.0.1\n"),
