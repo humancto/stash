@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSeedingPolicy, parseTransfer, parseSettings, type Transfer } from "./api";
+import { parseSeedingPolicy, parseTransfer, parseSettings, type SeedingPolicy, type Transfer } from "./api";
 import { describePolicy, draftFrom, parseDecimal, policyFromDraft, samePolicy, stateLabel } from "./seeding";
 
 describe("seeding policy parsing", () => {
@@ -95,5 +95,50 @@ describe("transfer labels", () => {
     [t("live", false, {}), "Downloading"],
   ])("%#: %s", (transfer, label) => {
     expect(stateLabel(transfer, 1000)).toBe(label);
+  });
+});
+
+describe("round trip", () => {
+  it("what is saved is what the form shows after a reload", () => {
+    const samples: SeedingPolicy[] = [
+      { mode: "stop" },
+      { mode: "forever" },
+      { mode: "ratio", ratio: 0.1 },
+      { mode: "ratio", ratio: 1.5 },
+      { mode: "ratio", ratio: 100 },
+    ];
+    for (const m of [1, 3, 6, 7, 8, 59, 60, 61, 90, 1440, 1441, 7 * 1440, 525_600]) {
+      samples.push({ mode: "time", minutes: m });
+    }
+    for (const p of samples) {
+      const r = policyFromDraft(draftFrom(p));
+      expect(r, JSON.stringify(p)).toEqual({ ok: true, policy: p });
+    }
+  });
+
+  it("hours that aren't whole minutes are refused, not rounded", () => {
+    for (const h of ["0.11", "0.13", "1.01"]) {
+      const r = policyFromDraft({ mode: "time", ratio: "1", hours: h });
+      expect(r.ok, h).toBe(false);
+    }
+    expect(policyFromDraft({ mode: "time", ratio: "1", hours: "1.25" })).toEqual({
+      ok: true,
+      policy: { mode: "time", minutes: 75 },
+    });
+  });
+
+  it("refuses a thousands separator and rounds the countdown sensibly", () => {
+    expect(parseDecimal("1,000")).toBeNull();
+    const tr = (stopsAt: number) =>
+      stateLabel(
+        {
+          id: 1, infoHash: "a", name: "x", files: null,
+          stats: { state: "live", error: null, progressBytes: 1, totalBytes: 1, finished: true, fileProgress: [], live: null },
+          seeding: { keep: false, uploadedBytes: 0, finishedAt: 1, stoppedByRule: false, stopsAt, targetBytes: null },
+        },
+        0,
+      );
+    expect(tr(59.7 * 60)).toBe("Done · seeding, stops in 1 h");
+    expect(tr(-100)).toBe("Done · seeding, stops in 1 min");
   });
 });

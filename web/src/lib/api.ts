@@ -442,9 +442,15 @@ async function errorFrom(res: Response): Promise<ApiError> {
   );
 }
 
-async function request(path: string, init: RequestInit = {}): Promise<unknown> {
+/** The one place requests are made; returns the Response on success. */
+async function requestRaw(path: string, init: RequestInit = {}): Promise<Response> {
   const res = await fetch(path, init);
   if (!res.ok) throw await errorFrom(res);
+  return res;
+}
+
+async function request(path: string, init: RequestInit = {}): Promise<unknown> {
+  const res = await requestRaw(path, init);
   const text = await res.text();
   return text ? (JSON.parse(text) as unknown) : null;
 }
@@ -482,12 +488,11 @@ export const api = {
     blocklist?: boolean;
     seeding?: SeedingPolicy;
   }): Promise<{ restart: boolean }> {
-    const res = await fetch("/api/settings", {
+    const res = await requestRaw("/api/settings", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(update),
     });
-    if (!res.ok) throw await errorFrom(res);
     if (res.status !== 200 && res.status !== 202)
       throw new ApiError("The server sent an unexpected response.", res.status);
     return { restart: res.status === 202 };

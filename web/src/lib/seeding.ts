@@ -10,15 +10,21 @@ export interface SeedingDraft {
   mode: SeedingMode;
   ratio: string;
   hours: string;
+  /** A saved time that isn't a whole 3-minute step (e.g. 7 minutes from
+   * the settings file): kept exactly as long as the field isn't edited. */
+  exact?: { text: string; minutes: number };
 }
 
 export const DEFAULT_RATIO = "1";
 export const DEFAULT_HOURS = "24";
 
-/** Accepts "1.5" and "1,5". Null for anything that isn't a plain number. */
-export function parseDecimal(text: string): number | null {
-  const t = text.trim().replace(",", ".");
-  if (!/^\d+(\.\d+)?$/.test(t)) return null;
+/** Accepts "1.5" and "1,5" (one separator, as a decimal mark). Null for
+ * anything else, including "1,000" (a thousands separator, not 1). */
+export function parseDecimal(text: string, maxDecimals = 6): number | null {
+  const raw = text.trim();
+  if (/^\d{1,3},\d{3}$/.test(raw)) return null;
+  const t = raw.replace(",", ".");
+  if (!new RegExp(`^\\d+(\\.\\d{1,${maxDecimals}})?$`).test(t)) return null;
   const n = Number(t);
   return Number.isFinite(n) ? n : null;
 }
@@ -34,14 +40,16 @@ export function minutesToHours(minutes: number): string | null {
 }
 
 export function draftFrom(p: SeedingPolicy): SeedingDraft {
-  return {
+  const base = {
     mode: p.mode,
     ratio: p.mode === "ratio" ? String(p.ratio) : DEFAULT_RATIO,
-    hours:
-      p.mode === "time"
-        ? (minutesToHours(p.minutes) ?? DEFAULT_HOURS)
-        : DEFAULT_HOURS,
+    hours: DEFAULT_HOURS,
   };
+  if (p.mode !== "time") return base;
+  const fits = minutesToHours(p.minutes);
+  if (fits !== null) return { ...base, hours: fits };
+  const text = (p.minutes / 60).toFixed(2);
+  return { ...base, hours: text, exact: { text, minutes: p.minutes } };
 }
 
 export type DraftResult =
@@ -69,19 +77,25 @@ export function policyFromDraft(d: SeedingDraft): DraftResult {
       return { ok: true, policy: { mode: "ratio", ratio: r } };
     }
     case "time": {
-      const h = parseDecimal(d.hours);
-      const minutes = h === null ? NaN : Math.round(h * 60);
-      if (
-        h === null ||
-        h < 0.1 ||
-        minutes > SEEDING_BOUNDS.maxMinutes ||
-        !/^\d+([.,]\d{1,2})?$/.test(d.hours.trim())
-      )
+      if (d.exact && d.hours.trim() === d.exact.text)
+        return { ok: true, policy: { mode: "time", minutes: d.exact.minutes } };
+      const h = parseDecimal(d.hours, 2);
+      const exact = h === null ? NaN : h * 60;
+      const minutes = Math.round(exact);
+      const maxHours = SEEDING_BOUNDS.maxMinutes / 60;
+      if (h === null || h < 0.1 || minutes > SEEDING_BOUNDS.maxMinutes)
         return {
           ok: false,
           field: "hours",
-          error:
-            "Enter hours from 0.1 to 8760, with at most 2 decimals, for example 24.",
+          error: `Enter hours from 0.1 to ${maxHours}, with at most 2 decimals, for example 24.`,
+        };
+      // Only values that are whole minutes, so what you save is what you
+      // see after a reload (0.11 h would be 6.6 minutes).
+      if (Math.abs(exact - minutes) > 1e-9)
+        return {
+          ok: false,
+          field: "hours",
+          error: "Use steps of 0.05 hours (3 minutes), for example 1.25.",
         };
       return { ok: true, policy: { mode: "time", minutes } };
     }
@@ -119,9 +133,11 @@ export function describePolicy(p: SeedingPolicy): string {
 
 function untilText(stopsAt: number, now: number): string {
   const left = Math.max(0, stopsAt - now);
-  if (left < 3600) return `${Math.max(1, Math.round(left / 60))} min`;
-  if (left < 86400) return `${Math.round(left / 3600)} h`;
-  return `${Math.round(left / 86400)} d`;
+  const mins = Math.max(1, Math.round(left / 60));
+  if (mins < 60) return `${mins} min`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} h`;
+  return `${Math.round(hours / 24)} d`;
 }
 
 /** The state word for a transfer row, seeding-aware. */

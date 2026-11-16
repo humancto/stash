@@ -234,7 +234,16 @@ export function Privacy() {
     if (!restart) {
       // Seeding only: applied already, no restart.
       const s = await load();
-      if (s) setSeedDraft(draftFrom(s.seeding));
+      if (s) {
+        setSeedDraft(draftFrom(s.seeding));
+      } else if (update.seeding) {
+        // Saved, but the reload failed: show what was sent, not stale data.
+        const sent = update.seeding;
+        setSettings((prev) => (prev ? { ...prev, seeding: sent, seedingFrom: "file" } : prev));
+        setPhase("done");
+        setMessage("Saved. Couldn't reload the settings to confirm.");
+        return;
+      }
       setPhase("done");
       setMessage(
         update.seeding?.mode === "stop"
@@ -637,7 +646,6 @@ function SeedingSection({
                 placeholder={DEFAULT_RATIO}
                 locked={off}
                 error={error?.field === "ratio" ? error.error : null}
-                onFocus={() => set({ mode: "ratio" })}
                 onChange={(ratio) => set({ ratio, mode: "ratio" })}
               />
             )}
@@ -650,7 +658,6 @@ function SeedingSection({
                 placeholder={DEFAULT_HOURS}
                 locked={off}
                 error={error?.field === "hours" ? error.error : null}
-                onFocus={() => set({ mode: "time" })}
                 onChange={(hours) => set({ hours, mode: "time" })}
               />
             )}
@@ -669,7 +676,6 @@ function NumberField({
   placeholder,
   locked,
   error,
-  onFocus,
   onChange,
 }: {
   id: string;
@@ -679,7 +685,6 @@ function NumberField({
   placeholder: string;
   locked: boolean;
   error: string | null;
-  onFocus: () => void;
   onChange: (v: string) => void;
 }) {
   const describedBy = [`${id}-unit`, error ? `${id}-error` : null]
@@ -702,7 +707,6 @@ function NumberField({
         aria-disabled={locked || undefined}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy}
-        onFocus={onFocus}
         onChange={(e) => onChange(e.target.value)}
       />
       <span id={`${id}-unit`} className="choice-field-unit">

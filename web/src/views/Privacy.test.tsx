@@ -203,4 +203,49 @@ describe("Privacy page", () => {
       expect(save).toHaveAttribute("aria-disabled", "true");
     }
   });
+
+  it("tabbing through the Seeding section changes nothing", async () => {
+    let put: Record<string, unknown> | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if (init?.method === "PUT") {
+          put = JSON.parse(String(init.body));
+          return new Response(JSON.stringify({ restart: true }), { status: 202 });
+        }
+        return json(settings());
+      }),
+    );
+    renderPage();
+    const stop = await screen.findByRole("radio", { name: /Stop when finished/ });
+    stop.focus();
+    for (let i = 0; i < 4; i++) await userEvent.tab();
+    expect(stop).toBeChecked();
+    expect(screen.getByRole("button", { name: "Save" })).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(screen.getByRole("radio", { name: /Warn/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Save and restart" }));
+    expect(put).toEqual({ vpn: "warn" });
+  });
+
+  it("a 7-minute rule from the file loads clean and is kept on an unrelated save", async () => {
+    let put: Record<string, unknown> | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if (init?.method === "PUT") {
+          put = JSON.parse(String(init.body));
+          return new Response(JSON.stringify({ restart: true }), { status: 202 });
+        }
+        return json(settings({ seeding: { mode: "time", minutes: 7 }, seeding_from: "file" }));
+      }),
+    );
+    renderPage();
+    const hours = await screen.findByRole("textbox", { name: "Hours" });
+    expect(hours).toHaveValue("0.12");
+    expect(hours).not.toHaveAttribute("aria-invalid");
+    expect(screen.getByRole("button", { name: "Save" })).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(screen.getByRole("radio", { name: /Warn/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Save and restart" }));
+    expect(put).toEqual({ vpn: "warn" });
+  });
 });
