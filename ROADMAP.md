@@ -7,7 +7,7 @@ Ordered by priority. One item per branch and PR, reviewed by the matching expert
 - [x] **fix-file-list**: `/api/transfers` includes each transfer's files so the UI shows Play/Download; handle suffix ranges (`bytes=-N`) in the stream endpoint.
 - [x] **security-hardening**: (1) Serve only audio/video/subtitle MIME types inline; everything else `application/octet-stream` + `Content-Disposition: attachment`; `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` on file responses. (2) Reject unexpected `Host` headers (DNS rebinding) and require same-origin `Origin` on state-changing requests (CSRF). (3) `overwrite: false` by default and session state moved outside the download directory.
 - [x] **web-ui**: Replace `src/index.html` with a Vite + React + TS app in `web/`, embedded in the binary. Views: Files, Transfers, File page (player, actions rail, subtitles slot, media-info slot). Works on Mac, phone and TV. Own visual identity, not put.io's.
-- [ ] **network-status**: Show what torrent peers see: the outbound interface for IPv4 and IPv6, whether it is a VPN tunnel, and the public IP and country. `GET /api/network`, plus a status chip in the rail and a panel on Transfers.
+- [x] **network-status**: Show what torrent peers see: the outbound interface for IPv4 and IPv6, whether it is a VPN tunnel, and the public IP and country. `GET /api/network`, plus a status chip in the rail and a panel on Transfers.
 - [ ] **network-privacy**: Fixed listen port over TCP + uTP, UPnP toggle, bind torrent traffic to a named interface (VPN kill switch), peer limit, all via env/config. Document VPN + port-forwarding setup.
 - [ ] **auth**: Access control before exposing beyond localhost (login or token), safe for LAN/Tailscale family use.
 
