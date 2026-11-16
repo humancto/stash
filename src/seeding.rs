@@ -16,11 +16,9 @@ use std::{
 };
 
 use librqbit::{
-    Api, ManagedTorrent, TorrentStatsState,
-    api::{ApiTorrentListOpts, TorrentIdOrHash},
+    Api, TorrentStatsState,
+    api::{ApiTorrentListOpts, EmptyJsonResponse, TorrentIdOrHash},
 };
-
-type ManagedTorrentHandle = Arc<ManagedTorrent>;
 use serde::{Deserialize, Serialize};
 
 use crate::privacy::{From_, Privacy};
@@ -78,14 +76,20 @@ impl Policy {
                         ratio: r.parse::<f64>().map_err(|_| bad())?,
                     }
                 } else if let Some(t) = v.strip_prefix("time:") {
-                    let (n, unit) = t.split_at(t.len().saturating_sub(1));
-                    let n: u32 = n.parse().map_err(|_| bad())?;
-                    let mult = match unit {
-                        "m" => 1,
-                        "h" => 60,
-                        "d" => 24 * 60,
-                        _ => return Err(bad()),
+                    // strip_suffix, not byte slicing: input may be non-ASCII.
+                    let (n, mult) = if let Some(n) = t.strip_suffix('m') {
+                        (n, 1)
+                    } else if let Some(n) = t.strip_suffix('h') {
+                        (n, 60)
+                    } else if let Some(n) = t.strip_suffix('d') {
+                        (n, 24 * 60)
+                    } else {
+                        return Err(bad());
                     };
+                    if !n.bytes().all(|b| b.is_ascii_digit()) {
+                        return Err(bad());
+                    }
+                    let n: u32 = n.parse().map_err(|_| bad())?;
                     Self::Time {
                         minutes: n.checked_mul(mult).ok_or_else(bad)?,
                     }
@@ -256,6 +260,29 @@ pub struct TransferSeeding {
     pub target_bytes: Option<u64>,
 }
 
+fn live_uploaded(st: &librqbit::TorrentStats) -> Option<u64> {
+    matches!(st.state, TorrentStatsState::Live).then_some(st.uploaded_bytes)
+}
+
+fn view_of(st: &librqbit::TorrentStats) -> View {
+    View {
+        finished: st.finished,
+        live: matches!(st.state, TorrentStatsState::Live),
+        starting: matches!(st.state, TorrentStatsState::Initializing { paused: false }),
+        total_bytes: st.total_bytes,
+    }
+}
+
+/// "Already paused" from librqbit is success; checked by state, not text.
+fn is_paused(api: &Api, id: TorrentIdOrHash) -> bool {
+    api.mgr_handle(id).is_ok_and(|h| {
+        matches!(
+            h.stats().state,
+            TorrentStatsState::Paused | TorrentStatsState::Initializing { paused: true }
+        )
+    })
+}
+
 impl Seeding {
     pub fn new(policy: Policy, from: From_, state_dir: &Path, boot: &str) -> Self {
         let path = state_dir.join("seeding.json");
@@ -268,11 +295,17 @@ impl Seeding {
     }
 
     pub fn policy(&self) -> (Policy, From_) {
-        *self.policy.read().unwrap()
+        *self
+            .policy
+            .read()
+            .expect("BUG: seeding policy lock poisoned")
     }
 
     pub fn set_policy(&self, p: Policy) {
-        let mut g = self.policy.write().unwrap();
+        let mut g = self
+            .policy
+            .write()
+            .expect("BUG: seeding policy lock poisoned");
         g.0 = p;
         g.1 = From_::File;
     }
@@ -280,19 +313,24 @@ impl Seeding {
     async fn save(&self, s: &SeedState) {
         let snapshot = s.clone();
         let path = self.path.clone();
-        match tokio::task::spawn_blocking(move || snapshot.save(&path)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => tracing::warn!(error = %e, "could not save seeding.json"),
-            Err(e) => tracing::warn!(error = %e, "could not save seeding.json"),
+        let result = tokio::task::spawn_blocking(move || snapshot.save(&path))
+            .await
+            .map_err(std::io::Error::other)
+            .and_then(|r| r);
+        if let Err(e) = result {
+            tracing::warn!(error = %e, "could not save seeding.json");
         }
     }
 
-    /// Best effort before exec: never blocks (try_lock).
+    /// Best effort before exec or exit: never blocks (try_lock).
     pub fn flush_now(&self) {
-        if let Ok(s) = self.state.try_lock()
-            && let Err(e) = s.save(&self.path)
-        {
-            tracing::warn!(error = %e, "could not save seeding.json before restart");
+        match self.state.try_lock() {
+            Ok(s) => {
+                if let Err(e) = s.save(&self.path) {
+                    tracing::warn!(error = %e, "could not save seeding.json before stopping");
+                }
+            }
+            Err(_) => tracing::debug!("seeding state busy; skipped the final save"),
         }
     }
 
@@ -307,7 +345,9 @@ impl Seeding {
             finished_at: e.finished_at,
             stopped_by_rule: e.stopped_by_rule,
             stops_at: match policy {
-                Policy::Time { minutes } => e.finished_at.map(|t| t + u64::from(minutes) * 60),
+                Policy::Time { minutes } => e
+                    .finished_at
+                    .map(|t| t.saturating_add(u64::from(minutes) * 60)),
                 _ => None,
             },
             target_bytes: match policy {
@@ -317,134 +357,160 @@ impl Seeding {
         }
     }
 
-    /// Before a user start: keep seeding it only if the rule says it's done
-    /// (otherwise the rule still applies, e.g. ratio not reached yet).
-    pub async fn on_user_start(&self, h: &ManagedTorrentHandle) {
+    /// A user's Start. Holds the seeding lock across the librqbit call so
+    /// the enforcer can't act in between; stats are read under the lock.
+    /// Keeps it seeding only if the rule already considers it done (no
+    /// ratio/time bypass), using the same "known finished" test as decide().
+    pub async fn user_start(
+        &self,
+        api: &Api,
+        id: TorrentIdOrHash,
+    ) -> Result<EmptyJsonResponse, librqbit::ApiError> {
+        let mut s = self.state.lock().await;
+        let h = api.mgr_handle(id)?;
         let hash = h.shared().info_hash.as_string();
         let st = h.stats();
         let (policy, _) = self.policy();
-        let mut s = self.state.lock().await;
         let e = s.torrents.entry(hash.clone()).or_default();
         e.account(&self.boot, live_uploaded(&st));
         e.stopped_by_rule = false;
-        if st.finished && policy != Policy::Forever && done(policy, e, st.total_bytes, unix_now()) {
+        let known_finished = st.finished || e.finished_at.is_some();
+        if known_finished
+            && policy != Policy::Forever
+            && done(policy, e, st.total_bytes, unix_now())
+        {
             s.keep_seeding.insert(hash);
         }
         self.save(&s).await;
+        api.api_torrent_action_start(id).await
     }
 
-    /// Before a user pause: fold the counter, forget the override.
-    pub async fn on_user_pause(&self, h: &ManagedTorrentHandle) {
+    /// A user's Pause: fold the counter, forget the override, pause — all
+    /// under the seeding lock.
+    pub async fn user_pause(
+        &self,
+        api: &Api,
+        id: TorrentIdOrHash,
+    ) -> Result<EmptyJsonResponse, librqbit::ApiError> {
+        let mut s = self.state.lock().await;
+        let h = api.mgr_handle(id)?;
         let hash = h.shared().info_hash.as_string();
         let st = h.stats();
-        let mut s = self.state.lock().await;
         let e = s.torrents.entry(hash.clone()).or_default();
         e.account(&self.boot, live_uploaded(&st));
         e.stopped_by_rule = false;
         s.keep_seeding.remove(&hash);
         self.save(&s).await;
+        api.api_torrent_action_pause(id).await
     }
 
-    /// After a delete: entries are only ever removed here.
-    pub async fn on_deleted(&self, hash: &str) {
+    /// A user's Delete: entries are only ever removed here.
+    pub async fn user_delete(
+        &self,
+        api: &Api,
+        id: TorrentIdOrHash,
+    ) -> Result<EmptyJsonResponse, librqbit::ApiError> {
         let mut s = self.state.lock().await;
-        let a = s.torrents.remove(hash).is_some();
-        let b = s.keep_seeding.remove(hash);
+        let hash = api.mgr_handle(id)?.shared().info_hash.as_string();
+        let resp = api.api_torrent_action_delete(id).await?;
+        let a = s.torrents.remove(&hash).is_some();
+        let b = s.keep_seeding.remove(&hash);
         if a || b {
             self.save(&s).await;
         }
+        Ok(resp)
     }
-}
 
-fn live_uploaded(st: &librqbit::TorrentStats) -> Option<u64> {
-    matches!(st.state, TorrentStatsState::Live).then_some(st.uploaded_bytes)
-}
-
-fn view_of(st: &librqbit::TorrentStats) -> View {
-    View {
-        finished: st.finished,
-        live: matches!(st.state, TorrentStatsState::Live),
-        starting: matches!(st.state, TorrentStatsState::Initializing { paused: false }),
-        total_bytes: st.total_bytes,
-    }
-}
-
-/// Enforcer task. Never holds a lock across a tick; for each candidate it
-/// takes the write gate, then the seeding lock, re-reads, then pauses.
-pub async fn enforce(seeding: Arc<Seeding>, privacy: Arc<Privacy>, api: Arc<Api>) {
-    let mut last_save = std::time::Instant::now();
-    let mut dirty = false;
-    loop {
-        tokio::time::sleep(TICK).await;
-        let (policy, _) = seeding.policy();
-        let list = api.api_torrent_list_ext(ApiTorrentListOpts { with_stats: true });
+    /// One enforcer pass. Every stats read happens under the seeding lock
+    /// (an older reading recorded after a newer one would look like a
+    /// counter reset and be counted twice), and only for torrents that
+    /// still exist (a deleted hash is never recreated).
+    async fn pass(&self, privacy: &Privacy, api: &Api, last_save: &mut std::time::Instant) {
+        let ids: Vec<usize> = api
+            .api_torrent_list_ext(ApiTorrentListOpts { with_stats: false })
+            .torrents
+            .iter()
+            .filter_map(|t| t.id)
+            .collect();
+        let (policy, _) = self.policy();
         let now = unix_now();
         let mut candidates = Vec::new();
         {
-            let mut s = seeding.state.lock().await;
-            for t in &list.torrents {
-                let Some(st) = &t.stats else { continue };
-                let e = s.torrents.entry(t.info_hash.clone()).or_default();
+            let mut s = self.state.lock().await;
+            let mut dirty = false;
+            let mut urgent = false;
+            for id in ids {
+                let Ok(h) = api.mgr_handle(TorrentIdOrHash::Id(id)) else {
+                    continue;
+                };
+                let hash = h.shared().info_hash.as_string();
+                let st = h.stats();
+                let e = s.torrents.entry(hash.clone()).or_default();
                 let before = e.clone();
-                e.account(&seeding.boot, live_uploaded(st));
+                e.account(&self.boot, live_uploaded(&st));
                 if st.finished && e.finished_at.is_none() {
                     e.finished_at = Some(now);
+                    // Must survive a crash: it's what closes the seeding
+                    // window after the next start.
+                    urgent = true;
                 }
-                if *e != before {
-                    dirty = true;
-                }
-                let keep = s.keep_seeding.contains(&t.info_hash);
-                let e = &s.torrents[&t.info_hash];
-                if decide(policy, keep, e, &view_of(st), now) == Verdict::Pause {
-                    candidates.push(t.info_hash.clone());
+                dirty |= *e != before;
+                let keep = s.keep_seeding.contains(&hash);
+                if decide(policy, keep, &s.torrents[&hash], &view_of(&st), now) == Verdict::Pause {
+                    candidates.push(hash);
                 }
             }
-            if dirty && last_save.elapsed() >= SAVE_EVERY {
-                seeding.save(&s).await;
-                dirty = false;
-                last_save = std::time::Instant::now();
+            if urgent || (dirty && last_save.elapsed() >= SAVE_EVERY) {
+                self.save(&s).await;
+                *last_save = std::time::Instant::now();
             }
         }
         for hash in candidates {
-            // Restarting: writes are refused; try again next tick, quietly.
+            // Restarting: writes are refused; try again next pass, quietly.
             let Ok(_writing) = privacy.write_guard().await else {
-                break;
+                return;
             };
-            let Ok(id) = hash.parse() else { continue };
-            let Ok(h) = api.mgr_handle(TorrentIdOrHash::Hash(id)) else {
-                continue;
-            };
-            let mut s = seeding.state.lock().await;
+            let Ok(id20) = hash.parse() else { continue };
+            let id = TorrentIdOrHash::Hash(id20);
+            let mut s = self.state.lock().await;
+            let Ok(h) = api.mgr_handle(id) else { continue };
             let st = h.stats();
-            let (policy, _) = seeding.policy();
+            let (policy, _) = self.policy();
             let keep = s.keep_seeding.contains(&hash);
             let e = s.torrents.entry(hash.clone()).or_default();
-            e.account(&seeding.boot, live_uploaded(&st));
+            e.account(&self.boot, live_uploaded(&st));
             if decide(policy, keep, e, &view_of(&st), unix_now()) != Verdict::Pause {
                 continue;
             }
-            e.stopped_by_rule = true;
             let uploaded = e.uploaded();
-            seeding.save(&s).await;
-            dirty = false;
-            last_save = std::time::Instant::now();
-            match api
-                .api_torrent_action_pause(TorrentIdOrHash::Hash(id))
-                .await
-            {
-                Ok(_) => tracing::info!(
-                    name = ?h.name(),
-                    info_hash = %hash,
-                    uploaded,
-                    reason = ?policy,
-                    "stopped seeding"
-                ),
-                Err(e) if e.to_string().contains("already paused") => {}
-                Err(e) => {
-                    tracing::warn!(info_hash = %hash, error = %e, "could not stop seeding; will retry")
+            let paused = match api.api_torrent_action_pause(id).await {
+                Ok(_) => true,
+                Err(_) if is_paused(api, id) => true,
+                Err(err) => {
+                    tracing::warn!(info_hash = %hash, error = %err, "could not stop seeding; will retry");
+                    false
                 }
+            };
+            if paused {
+                // Only marked once the pause actually happened.
+                if let Some(e) = s.torrents.get_mut(&hash) {
+                    e.stopped_by_rule = true;
+                }
+                tracing::info!(name = ?h.name(), info_hash = %hash, uploaded, reason = ?policy, "stopped seeding");
             }
+            self.save(&s).await;
+            *last_save = std::time::Instant::now();
         }
+    }
+}
+
+/// Enforcer task: a pass at once (the session has just resumed torrents),
+/// then every TICK. Holds no lock between passes.
+pub async fn enforce(seeding: Arc<Seeding>, privacy: Arc<Privacy>, api: Arc<Api>) {
+    let mut last_save = std::time::Instant::now();
+    loop {
+        seeding.pass(&privacy, &api, &mut last_save).await;
+        tokio::time::sleep(TICK).await;
     }
 }
 
@@ -503,6 +569,10 @@ mod tests {
             "seed",
             "time:99999999999d",
         ] {
+            assert!(Policy::parse(bad).is_err(), "{bad:?}");
+        }
+        // Non-ASCII must be an error, never a panic (byte slicing).
+        for bad in ["time:5é", "time:é", "time:５m", "ratio:１", "time:+5m"] {
             assert!(Policy::parse(bad).is_err(), "{bad:?}");
         }
     }

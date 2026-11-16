@@ -53,9 +53,10 @@ The **Privacy** page shows the path torrent traffic takes (stash â†’ interface â
 By default stash stops sharing a transfer as soon as it finishes: it pauses it (the file still plays and downloads keep working). Peers still get pieces from you while it downloads; that is how BitTorrent works. Seeding longer helps others finish and keeps your address visible to peers for longer.
 
 - Choose on the Privacy page or with `STASH_SEEDING`: stop when finished, until a ratio, for a while, or keep seeding. Changing it applies at once, no restart.
-- "Seed" on a finished transfer shares it again; if the rule had stopped it, the rule then leaves it alone until you pause it. Under a ratio or time limit that isn't reached yet, the rule still applies.
+- "Seed" on a finished transfer shares it again; if the rule had stopped it, the rule then leaves it alone until you pause it. Under a ratio or time limit that isn't reached yet, the rule still applies. A transfer you chose to Seed stays seeding if you change the rule later; pause it to put it back under the rule.
 - stash keeps its own upload total per transfer (librqbit's resets on every pause and restart) in `<STASH_STATE_DIR>/seeding.json`. Time limits count wall-clock time since stash first saw the transfer finished; for transfers that were already finished before this version, that is from the upgrade.
 - **Upgrade note:** transfers that were finished and seeding stop seeding a few seconds after you start this version, unless you pick "Keep seeding".
+- **Residual window:** librqbit resumes transfers when the session opens, and the rule's first check runs right after. A finished transfer can announce itself for a moment in between. stash records "finished" to disk at once so this window stays short, and pauses persist, so it only applies to transfers that were seeding when stash stopped.
 
 ## Network status
 

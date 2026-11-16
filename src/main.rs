@@ -261,6 +261,7 @@ async fn main() -> anyhow::Result<()> {
         tracing::error!(?outcome, "the seeding rule stopped; exiting");
         std::process::exit(70);
     });
+    let flush_on_exit = seeding.clone();
     let state = AppState {
         api,
         probe,
@@ -290,6 +291,26 @@ async fn main() -> anyhow::Result<()> {
     let app = web::attach::<web::Dist, ()>(api_routes)
         .layer(middleware::from_fn_with_state(guard_cfg, security::guard));
 
+    // On Ctrl-C / SIGTERM, save the seeding counters before exiting.
+    {
+        let seeding = flush_on_exit;
+        tokio::spawn(async move {
+            let mut term =
+                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "no SIGTERM handler");
+                        return;
+                    }
+                };
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+            seeding.flush_now();
+            std::process::exit(0);
+        });
+    }
     tracing::info!(
         "stash listening on http://{addr}, saving to {}",
         dir.display()
@@ -430,8 +451,7 @@ async fn pause(
     Path(id): Path<TorrentIdOrHash>,
 ) -> Result<impl IntoResponse> {
     let _writing = privacy.write_guard().await?;
-    seed.on_user_pause(&api.mgr_handle(id)?).await;
-    Ok(Json(api.api_torrent_action_pause(id).await?))
+    Ok(Json(seed.user_pause(&api, id).await?))
 }
 
 async fn start(
@@ -441,8 +461,7 @@ async fn start(
     Path(id): Path<TorrentIdOrHash>,
 ) -> Result<impl IntoResponse> {
     let _writing = privacy.write_guard().await?;
-    seed.on_user_start(&api.mgr_handle(id)?).await;
-    Ok(Json(api.api_torrent_action_start(id).await?))
+    Ok(Json(seed.user_start(&api, id).await?))
 }
 
 /// Removes the transfer and its files from disk.
@@ -453,11 +472,7 @@ async fn delete(
     Path(id): Path<TorrentIdOrHash>,
 ) -> Result<impl IntoResponse> {
     let _writing = privacy.write_guard().await?;
-    // Resolve the hash first: after the delete there is nothing to look up.
-    let hash = api.mgr_handle(id)?.shared().info_hash.as_string();
-    let resp = api.api_torrent_action_delete(id).await?;
-    seed.on_deleted(&hash).await;
-    Ok(Json(resp))
+    Ok(Json(seed.user_delete(&api, id).await?))
 }
 
 /// Serves a file with HTTP range support. The stream reads straight from the
