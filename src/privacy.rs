@@ -109,6 +109,10 @@ pub struct SettingsFile {
     pub vpn: Option<Level>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocklist: Option<bool>,
+    /// Kept raw and validated after loading, so a bad value here can't
+    /// reset the other settings (serde would reject the whole file).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seeding: Option<serde_json::Value>,
 }
 
 impl SettingsFile {
@@ -187,6 +191,8 @@ pub struct Settings {
     pub listen_port: Option<u16>,
     pub upnp: bool,
     pub peer_limit: Option<usize>,
+    pub seeding: crate::seeding::Policy,
+    pub seeding_from: From_,
 }
 
 impl Settings {
@@ -250,7 +256,16 @@ impl Settings {
             ),
             None => None,
         };
+        let (seeding, seeding_from) = match env("STASH_SEEDING") {
+            Some(v) => (crate::seeding::Policy::parse(&v)?, From_::Env),
+            None => match crate::seeding::policy_from_file(file.seeding.as_ref()) {
+                Some(p) => (p, From_::File),
+                None => (crate::seeding::Policy::Stop, From_::Default),
+            },
+        };
         Ok(Self {
+            seeding,
+            seeding_from,
             vpn,
             vpn_from,
             blocklist,
@@ -846,6 +861,8 @@ pub struct Privacy {
     notify: tokio::sync::Notify,
     /// Serialises read-modify-write of settings.json.
     settings_lock: tokio::sync::Mutex<()>,
+    /// Set once by main after construction (it needs our boot id).
+    pub seeding: std::sync::OnceLock<Arc<crate::seeding::Seeding>>,
 }
 
 pub struct WriteGuard<'a>(#[allow(dead_code)] tokio::sync::RwLockReadGuard<'a, ()>);
@@ -894,6 +911,7 @@ impl Privacy {
             gate: tokio::sync::RwLock::new(()),
             notify: tokio::sync::Notify::new(),
             settings_lock: tokio::sync::Mutex::new(()),
+            seeding: std::sync::OnceLock::new(),
         }
     }
 
@@ -1001,6 +1019,9 @@ impl Privacy {
         loop {
             // Let in-flight writes finish so exec doesn't cut one in half.
             let guard = tokio::time::timeout(Duration::from_secs(5), self.gate.write()).await;
+            if let Some(s) = self.seeding.get() {
+                s.flush_now();
+            }
             let err = exec_self();
             drop(guard);
             self.exec_failed.store(true, Ordering::Release);
@@ -1106,6 +1127,8 @@ pub struct SettingsView {
     pub listen_port: Option<u16>,
     pub restart_pending: bool,
     pub boot_id: String,
+    pub seeding: crate::seeding::Policy,
+    pub seeding_from: From_,
 }
 
 pub async fn get_settings(State(p): State<Arc<Privacy>>) -> Response {
@@ -1121,6 +1144,8 @@ pub async fn get_settings(State(p): State<Arc<Privacy>>) -> Response {
         listen_port: s.listen_port,
         restart_pending: p.restart_pending.load(Ordering::Acquire),
         boot_id: p.boot_id.clone(),
+        seeding: p.seeding.get().map_or(s.seeding, |x| x.policy().0),
+        seeding_from: p.seeding.get().map_or(s.seeding_from, |x| x.policy().1),
     })
     .into_response();
     r.headers_mut()
@@ -1133,6 +1158,7 @@ pub async fn get_settings(State(p): State<Arc<Privacy>>) -> Response {
 pub struct SettingsUpdate {
     pub vpn: Option<Level>,
     pub blocklist: Option<bool>,
+    pub seeding: Option<crate::seeding::Policy>,
 }
 
 fn json_error(status: StatusCode, msg: &str) -> Response {
@@ -1144,9 +1170,20 @@ pub async fn put_settings(
     State(p): State<Arc<Privacy>>,
     Json(u): Json<SettingsUpdate>,
 ) -> Response {
-    if u.vpn.is_none() && u.blocklist.is_none() {
+    if u.vpn.is_none() && u.blocklist.is_none() && u.seeding.is_none() {
         return json_error(StatusCode::BAD_REQUEST, "Nothing to change.");
     }
+    if u.seeding.is_some() && p.settings.seeding_from == From_::Env {
+        return json_error(
+            StatusCode::CONFLICT,
+            "Seeding is set by STASH_SEEDING. Change it there.",
+        );
+    }
+    let seeding = match u.seeding.map(crate::seeding::Policy::validate) {
+        Some(Err(e)) => return json_error(StatusCode::BAD_REQUEST, &format!("Seeding: {e}.")),
+        Some(Ok(p)) => Some(p),
+        None => None,
+    };
     let _one_at_a_time = p.settings_lock.lock().await;
     if u.vpn.is_some() && p.settings.vpn_from == From_::Env {
         return json_error(
@@ -1167,6 +1204,9 @@ pub async fn put_settings(
     if let Some(b) = u.blocklist {
         file.blocklist = Some(b);
     }
+    if let Some(sp) = seeding {
+        file.seeding = serde_json::to_value(sp).ok();
+    }
     let path = p.settings_path.clone();
     let saved = tokio::task::spawn_blocking(move || file.save(&path)).await;
     match saved {
@@ -1185,8 +1225,23 @@ pub async fn put_settings(
             );
         }
     }
+    // Seeding applies live, even when a restart follows.
+    if let (Some(sp), Some(seed)) = (seeding, p.seeding.get()) {
+        seed.set_policy(sp);
+    }
+    if u.vpn.is_none() && u.blocklist.is_none() {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({ "restart": false })),
+        )
+            .into_response();
+    }
     schedule_restart(&p);
-    StatusCode::ACCEPTED.into_response()
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "restart": true })),
+    )
+        .into_response()
 }
 
 /// Marks the restart as pending at once (so the UI never mistakes this
@@ -1264,8 +1319,32 @@ mod tests {
         let file = SettingsFile {
             vpn: Some(Level::Warn),
             blocklist: Some(false),
+            seeding: None,
         };
         let f = Settings::resolve(&none, &file).unwrap();
+        assert_eq!(f.seeding, crate::seeding::Policy::Stop);
+        assert_eq!(f.seeding_from, From_::Default);
+
+        // A bad seeding value only resets seeding, never vpn/blocklist.
+        let bad = SettingsFile {
+            vpn: Some(Level::Warn),
+            blocklist: Some(false),
+            seeding: Some(serde_json::json!({"mode": "ratio", "ratio": 9999.0})),
+        };
+        let b = Settings::resolve(&none, &bad).unwrap();
+        assert_eq!(
+            (b.vpn.level, b.seeding),
+            (Level::Warn, crate::seeding::Policy::Stop)
+        );
+        let raw: SettingsFile =
+            serde_json::from_str(r#"{"vpn":"off","seeding":{"mode":"nonsense"}}"#).unwrap();
+        assert_eq!(raw.vpn, Some(Level::Off));
+        let env = env_of(&[("STASH_SEEDING", "ratio:2")]);
+        let e = Settings::resolve(&env, &bad).unwrap();
+        assert_eq!(
+            (e.seeding, e.seeding_from),
+            (crate::seeding::Policy::Ratio { ratio: 2.0 }, From_::Env)
+        );
         assert_eq!((f.vpn.level, f.vpn_from), (Level::Warn, From_::File));
         assert_eq!(
             (f.blocklist.clone(), f.blocklist_from),

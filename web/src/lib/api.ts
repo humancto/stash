@@ -33,13 +33,42 @@ export interface TorrentStats {
   live: LiveStats | null;
 }
 
+export interface TransferSeeding {
+  /** "Seed" was pressed: the seeding rule skips this transfer. */
+  keep: boolean;
+  /** Total uploaded across pauses and restarts. */
+  uploadedBytes: number;
+  finishedAt: number | null;
+  /** Paused by the seeding rule (not by the user). */
+  stoppedByRule: boolean;
+  /** Time mode: when the rule stops it (unix seconds). */
+  stopsAt: number | null;
+  /** Ratio mode: bytes to upload before the rule stops it. */
+  targetBytes: number | null;
+}
+
 export interface Transfer {
   id: number;
   infoHash: string;
   name: string | null;
   files: TorrentFile[] | null;
   stats: TorrentStats | null;
+  /** Null from an older stash or a malformed value; never drops the transfer. */
+  seeding: TransferSeeding | null;
 }
+
+export type SeedingPolicy =
+  | { mode: "stop" }
+  | { mode: "forever" }
+  | { mode: "ratio"; ratio: number }
+  | { mode: "time"; minutes: number };
+
+export const SEEDING_BOUNDS = {
+  minRatio: 0.1,
+  maxRatio: 100,
+  minMinutes: 1,
+  maxMinutes: 365 * 24 * 60,
+} as const;
 
 export type Verdict = "tunnel" | "exposed" | "offline";
 
@@ -174,7 +203,56 @@ export function parseTransfer(v: unknown): Transfer | null {
     name: str(v["name"]),
     files,
     stats: parseStats(v["stats"]),
+    seeding: parseTransferSeeding(v["seeding"]),
   };
+}
+
+function parseTransferSeeding(v: unknown): TransferSeeding | null {
+  if (!isObj(v)) return null;
+  const uploadedBytes = num(v["uploaded_bytes"]);
+  if (
+    typeof v["keep"] !== "boolean" ||
+    typeof v["stopped_by_rule"] !== "boolean" ||
+    uploadedBytes === null
+  )
+    return null;
+  return {
+    keep: v["keep"],
+    uploadedBytes,
+    finishedAt: num(v["finished_at"]),
+    stoppedByRule: v["stopped_by_rule"],
+    stopsAt: num(v["stops_at"]),
+    targetBytes: num(v["target_bytes"]),
+  };
+}
+
+export function parseSeedingPolicy(v: unknown): SeedingPolicy | null {
+  if (!isObj(v)) return null;
+  switch (v["mode"]) {
+    case "stop":
+      return { mode: "stop" };
+    case "forever":
+      return { mode: "forever" };
+    case "ratio": {
+      const ratio = num(v["ratio"]);
+      return ratio !== null &&
+        ratio >= SEEDING_BOUNDS.minRatio &&
+        ratio <= SEEDING_BOUNDS.maxRatio
+        ? { mode: "ratio", ratio }
+        : null;
+    }
+    case "time": {
+      const minutes = num(v["minutes"]);
+      return minutes !== null &&
+        Number.isInteger(minutes) &&
+        minutes >= SEEDING_BOUNDS.minMinutes &&
+        minutes <= SEEDING_BOUNDS.maxMinutes
+        ? { mode: "time", minutes }
+        : null;
+    }
+    default:
+      return null;
+  }
 }
 
 export function parseTransferList(v: unknown): Transfer[] {
@@ -252,6 +330,8 @@ export interface Settings {
   listenPort: number | null;
   restartPending: boolean;
   bootId: string;
+  seeding: SeedingPolicy;
+  seedingFrom: SettingFrom;
 }
 
 export function parseSettings(v: unknown): Settings {
@@ -262,13 +342,17 @@ export function parseSettings(v: unknown): Settings {
   const blocklistFrom = FROMS.find((x) => x === v["blocklist_from"]);
   const st = v["blocklist_status"];
   const bootId = str(v["boot_id"]);
+  const seeding = parseSeedingPolicy(v["seeding"]);
+  const seedingFrom = FROMS.find((x) => x === v["seeding_from"]);
   if (
     !vpn ||
     !vpnFrom ||
     !blocklistFrom ||
     typeof v["blocklist"] !== "boolean" ||
     !isObj(st) ||
-    bootId === null
+    bootId === null ||
+    !seeding ||
+    !seedingFrom
   )
     throw bad();
   return {
@@ -289,6 +373,8 @@ export function parseSettings(v: unknown): Settings {
     listenPort: num(v["listen_port"]),
     restartPending: v["restart_pending"] === true,
     bootId,
+    seeding,
+    seedingFrom,
   };
 }
 
@@ -356,9 +442,15 @@ async function errorFrom(res: Response): Promise<ApiError> {
   );
 }
 
-async function request(path: string, init: RequestInit = {}): Promise<unknown> {
+/** The one place requests are made; returns the Response on success. */
+async function requestRaw(path: string, init: RequestInit = {}): Promise<Response> {
   const res = await fetch(path, init);
   if (!res.ok) throw await errorFrom(res);
+  return res;
+}
+
+async function request(path: string, init: RequestInit = {}): Promise<unknown> {
+  const res = await requestRaw(path, init);
   const text = await res.text();
   return text ? (JSON.parse(text) as unknown) : null;
 }
@@ -390,12 +482,20 @@ export const api = {
       await request("/api/settings", signal ? { signal } : {}),
     );
   },
-  async saveSettings(update: { vpn?: KillLevel; blocklist?: boolean }): Promise<void> {
-    await request("/api/settings", {
+  /** 202 → stash restarts to apply; 200 → applied already. */
+  async saveSettings(update: {
+    vpn?: KillLevel;
+    blocklist?: boolean;
+    seeding?: SeedingPolicy;
+  }): Promise<{ restart: boolean }> {
+    const res = await requestRaw("/api/settings", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(update),
     });
+    if (res.status !== 200 && res.status !== 202)
+      throw new ApiError("The server sent an unexpected response.", res.status);
+    return { restart: res.status === 202 };
   },
   async restart(): Promise<void> {
     await request("/api/settings/restart", { method: "POST" });

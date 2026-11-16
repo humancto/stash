@@ -4,6 +4,7 @@
 mod network;
 mod privacy;
 mod security;
+mod seeding;
 mod web;
 
 use std::{
@@ -73,6 +74,13 @@ struct AppState {
     api: Arc<Api>,
     probe: Arc<network::NetworkProbe>,
     privacy: Arc<Privacy>,
+    seeding: Arc<seeding::Seeding>,
+}
+
+impl FromRef<AppState> for Arc<seeding::Seeding> {
+    fn from_ref(s: &AppState) -> Self {
+        s.seeding.clone()
+    }
 }
 
 impl FromRef<AppState> for Arc<Api> {
@@ -233,10 +241,32 @@ async fn main() -> anyhow::Result<()> {
         tracing::error!(?outcome, "the kill switch supervisor stopped; exiting");
         std::process::exit(70);
     });
+
+    let seeding = Arc::new(seeding::Seeding::new(
+        privacy.settings.seeding,
+        privacy.settings.seeding_from,
+        &base.state_dir,
+        privacy.boot_id(),
+    ));
+    let _ = privacy.seeding.set(seeding.clone());
+    // The seeding rule is privacy-relevant too: if it dies, don't keep
+    // running as if everything were "keep seeding forever".
+    let enforcer = tokio::spawn(seeding::enforce(
+        seeding.clone(),
+        privacy.clone(),
+        api.clone(),
+    ));
+    tokio::spawn(async move {
+        let outcome = enforcer.await;
+        tracing::error!(?outcome, "the seeding rule stopped; exiting");
+        std::process::exit(70);
+    });
+    let flush_on_exit = seeding.clone();
     let state = AppState {
         api,
         probe,
         privacy,
+        seeding,
     };
 
     web::warn_if_unbuilt::<web::Dist>();
@@ -261,6 +291,26 @@ async fn main() -> anyhow::Result<()> {
     let app = web::attach::<web::Dist, ()>(api_routes)
         .layer(middleware::from_fn_with_state(guard_cfg, security::guard));
 
+    // On Ctrl-C / SIGTERM, save the seeding counters before exiting.
+    {
+        let seeding = flush_on_exit;
+        tokio::spawn(async move {
+            let mut term =
+                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "no SIGTERM handler");
+                        return;
+                    }
+                };
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+            seeding.flush_now();
+            std::process::exit(0);
+        });
+    }
     tracing::info!(
         "stash listening on http://{addr}, saving to {}",
         dir.display()
@@ -318,9 +368,25 @@ fn prepare_state_dir(download: &FsPath, state: &FsPath) -> anyhow::Result<PathBu
     Ok(new)
 }
 
-/// Lists transfers with stats and files. librqbit's list leaves `files` empty
-/// ("filled in /details"), so fill them in from the details call.
-async fn list(State(api): State<Arc<Api>>) -> impl IntoResponse {
+#[derive(serde::Serialize)]
+struct TransferItem {
+    #[serde(flatten)]
+    details: librqbit::api::TorrentDetailsResponse,
+    seeding: seeding::TransferSeeding,
+}
+
+#[derive(serde::Serialize)]
+struct TransferList {
+    torrents: Vec<TransferItem>,
+}
+
+/// Lists transfers with stats, files and seeding state. librqbit's list
+/// leaves `files` empty ("filled in /details"), so fill them in from the
+/// details call.
+async fn list(
+    State(api): State<Arc<Api>>,
+    State(seed): State<Arc<seeding::Seeding>>,
+) -> impl IntoResponse {
     let mut resp = api.api_torrent_list_ext(ApiTorrentListOpts { with_stats: true });
     // Must run after the list call has returned: calling details from inside
     // librqbit's `with_torrents` would take its db read lock re-entrantly,
@@ -333,7 +399,17 @@ async fn list(State(api): State<Arc<Api>>) -> impl IntoResponse {
             Err(e) => tracing::debug!(id, error = %e, "no details for listed torrent"),
         }
     }
-    Json(resp)
+    let state = seed.state.lock().await;
+    let torrents = resp
+        .torrents
+        .into_iter()
+        .map(|details| {
+            let total = details.stats.as_ref().map_or(0, |s| s.total_bytes);
+            let seeding = seed.view(&state, &details.info_hash, total);
+            TransferItem { details, seeding }
+        })
+        .collect();
+    Json(TransferList { torrents })
 }
 
 #[derive(Deserialize)]
@@ -371,29 +447,32 @@ async fn details(
 async fn pause(
     State(api): State<Arc<Api>>,
     State(privacy): State<Arc<Privacy>>,
+    State(seed): State<Arc<seeding::Seeding>>,
     Path(id): Path<TorrentIdOrHash>,
 ) -> Result<impl IntoResponse> {
     let _writing = privacy.write_guard().await?;
-    Ok(Json(api.api_torrent_action_pause(id).await?))
+    Ok(Json(seed.user_pause(&api, id).await?))
 }
 
 async fn start(
     State(api): State<Arc<Api>>,
     State(privacy): State<Arc<Privacy>>,
+    State(seed): State<Arc<seeding::Seeding>>,
     Path(id): Path<TorrentIdOrHash>,
 ) -> Result<impl IntoResponse> {
     let _writing = privacy.write_guard().await?;
-    Ok(Json(api.api_torrent_action_start(id).await?))
+    Ok(Json(seed.user_start(&api, id).await?))
 }
 
 /// Removes the transfer and its files from disk.
 async fn delete(
     State(api): State<Arc<Api>>,
     State(privacy): State<Arc<Privacy>>,
+    State(seed): State<Arc<seeding::Seeding>>,
     Path(id): Path<TorrentIdOrHash>,
 ) -> Result<impl IntoResponse> {
     let _writing = privacy.write_guard().await?;
-    Ok(Json(api.api_torrent_action_delete(id).await?))
+    Ok(Json(seed.user_delete(&api, id).await?))
 }
 
 /// Serves a file with HTTP range support. The stream reads straight from the

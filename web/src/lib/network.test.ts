@@ -304,6 +304,8 @@ describe("kill switch and settings parsing", () => {
       listen_port: 51413,
       restart_pending: false,
       boot_id: "b1",
+      seeding: { mode: "ratio", ratio: 1.5 },
+      seeding_from: "file",
     };
     expect(parseSettings(body)).toMatchObject({ vpn: "strict", vpnFrom: "env", blocklist: false, listenPort: 51413 });
     expect(() => parseSettings({ ...body, vpn: "auto" })).toThrow("unexpected settings");
