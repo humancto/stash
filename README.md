@@ -26,6 +26,15 @@ The web UI source is in `web/`. `make web` builds it into `web/dist`.
 | `STASH_ADDR` | `127.0.0.1:3030` | Listen address. There is no auth, so keep it local or behind Tailscale |
 | `STASH_STATE_DIR` | `./stash-state` | Session state (transfer list, resume data). Must be outside `STASH_DIR`. State in the old `<STASH_DIR>/.session` is moved here on first start. Because the default is relative, `STASH_DIR` can't be `.` or a parent of the working directory unless `STASH_STATE_DIR` is set elsewhere |
 | `STASH_ALLOWED_HOSTS` | (none) | Comma-separated host names accepted in the `Host` header besides IP addresses and `localhost`, e.g. a Tailscale MagicDNS name |
+| `STASH_IP_LOOKUP` | `on` | `off` stops stash asking Cloudflare for its public IP. The network status then shows only the interface |
+
+## Network status
+
+The rail and the top of Transfers show what torrent peers can see: the interface stash's traffic leaves on, whether it looks like a VPN tunnel, and the public IP and country.
+
+- The interface comes from the operating system's route for general internet traffic, checked per IPv4 and IPv6. An interface with no hardware address (utun, tun, wg, …) counts as a tunnel. If either family leaves on a normal interface, the status is "No VPN", because an IPv6 leak shows your address too.
+- The public IP comes from `https://1.1.1.1/cdn-cgi/trace` (and the IPv6 equivalent). Cloudflare sees your IP, as any website does. While a stash page is open, stash checks every 2 minutes, when you open Transfers (if the last check is older than 30 s) and when you press "Check again". The server caches the answer for 30 s. Set `STASH_IP_LOOKUP=off` to stop it.
+- This is a status, not protection. If the VPN drops, stash keeps running on your normal connection. A kill switch is on the roadmap (network-privacy).
 
 ## Security
 
@@ -44,6 +53,7 @@ The web UI source is in `web/`. `make web` builds it into `web/dist`.
 | POST   | `/api/transfers/{id}/pause` · `/start` | Pause / resume                        |
 | DELETE | `/api/transfers/{id}`                  | Remove the transfer and its files     |
 | GET    | `/api/transfers/{id}/files/{n}`        | Stream (HTTP range); `?download=1` forces a download |
+| GET    | `/api/network`                         | What peers see (interface, tunnel, public IP); cached 30 s, `?refresh=1` forces a check (at most every 5 s) |
 
 Unknown `/api` paths return a `404` JSON error. Every other `GET` path returns the web UI, so app links such as `/watch/1/0` work when you open them directly.
 

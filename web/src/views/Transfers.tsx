@@ -2,6 +2,7 @@ import { ChevronDown, ChevronRight, Pause, Play } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { ConfirmDelete } from "../components/ConfirmDelete";
+import { NetworkPanel } from "../components/NetworkStatus";
 import { Reel } from "../components/Reel";
 import { api, type Transfer } from "../lib/api";
 import { fileStatus } from "../lib/files";
@@ -171,6 +172,7 @@ export function Transfers() {
           )}
         </div>
       </div>
+      <NetworkPanel />
       {error && (
         <div className="banner" role="alert">
           <span>

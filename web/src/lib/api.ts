@@ -41,6 +41,30 @@ export interface Transfer {
   stats: TorrentStats | null;
 }
 
+export type Verdict = "tunnel" | "exposed" | "offline";
+
+export type Family =
+  | { route: false }
+  | {
+      route: true;
+      iface: string | null;
+      tunnel: boolean;
+      routeConsistent: boolean;
+      localIp: string;
+      publicIp: string | null;
+      country: string | null;
+      error: string | null;
+    };
+
+export interface NetworkReport {
+  verdict: Verdict;
+  /** Unix seconds. */
+  checkedAt: number;
+  lookupEnabled: boolean;
+  ipv4: Family;
+  ipv6: Family;
+}
+
 type Json = Record<string, unknown>;
 
 const isObj = (v: unknown): v is Json =>
@@ -133,6 +157,44 @@ export function parseTransferList(v: unknown): Transfer[] {
     .filter((t): t is Transfer => t !== null);
 }
 
+const VERDICTS: readonly Verdict[] = ["tunnel", "exposed", "offline"];
+
+function parseFamily(v: unknown): Family {
+  if (!isObj(v) || typeof v["route"] !== "boolean")
+    throw new ApiError("The server sent an unexpected network report.", 0);
+  if (!v["route"]) return { route: false };
+  const localIp = str(v["local_ip"]);
+  if (localIp === null || typeof v["tunnel"] !== "boolean")
+    throw new ApiError("The server sent an unexpected network report.", 0);
+  return {
+    route: true,
+    iface: str(v["interface"]),
+    tunnel: v["tunnel"],
+    routeConsistent: v["route_consistent"] !== false,
+    localIp,
+    publicIp: str(v["public_ip"]),
+    country: str(v["country"]),
+    error: str(v["error"]),
+  };
+}
+
+export function parseNetwork(v: unknown): NetworkReport {
+  const bad = () =>
+    new ApiError("The server sent an unexpected network report.", 0);
+  if (!isObj(v)) throw bad();
+  const verdict = VERDICTS.find((x) => x === v["verdict"]);
+  const checkedAt = num(v["checked_at"]);
+  if (!verdict || checkedAt === null || typeof v["lookup_enabled"] !== "boolean")
+    throw bad();
+  return {
+    verdict,
+    checkedAt,
+    lookupEnabled: v["lookup_enabled"],
+    ipv4: parseFamily(v["ipv4"]),
+    ipv6: parseFamily(v["ipv6"]),
+  };
+}
+
 export class ApiError extends Error {
   readonly status: number;
   constructor(message: string, status: number) {
@@ -188,6 +250,17 @@ export const api = {
   },
   async remove(id: number): Promise<void> {
     await request(`/api/transfers/${id}`, { method: "DELETE" });
+  },
+  async network(
+    opts: { refresh?: boolean; signal?: AbortSignal } = {},
+  ): Promise<NetworkReport> {
+    const qs = opts.refresh ? `?${new URLSearchParams({ refresh: "1" })}` : "";
+    return parseNetwork(
+      await request(
+        `/api/network${qs}`,
+        opts.signal ? { signal: opts.signal } : {},
+      ),
+    );
   },
 };
 

@@ -2801,6 +2801,8 @@ dependencies = [
  "anyhow",
  "axum",
  "librqbit",
+ "network-interface",
+ "reqwest",
  "rust-embed",
  "serde",
  "serde_json",

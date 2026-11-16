@@ -283,9 +283,46 @@ a {
 }
 .rail-foot {
   margin-top: auto;
-  padding: 12px;
-  color: var(--text-3);
+  padding: 8px 0 4px;
+}
+
+/* Network chip: what torrent peers can see. Word first, colour second. */
+.net-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-md);
   font-size: var(--t-xs);
+  font-weight: 600;
+  text-decoration: none;
+}
+.net-chip:hover {
+  border-color: var(--hair-strong);
+  background: var(--raised);
+}
+.net-chip-icon {
+  position: relative;
+  display: inline-flex;
+}
+.net-chip-icon svg {
+  width: 18px;
+  height: 18px;
+}
+.net-chip-icon .status-dot {
+  position: absolute;
+  right: -3px;
+  bottom: -2px;
+  width: 7px;
+  height: 7px;
+  box-shadow: 0 0 0 2px var(--ground);
+}
+.net-chip-word {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .main {
@@ -405,6 +442,92 @@ a {
   margin: 4px 0 0;
   color: var(--text-3);
   font-size: var(--t-sm);
+}
+
+/* ---------- Network panel (top of Transfers) ---------- */
+
+.net-panel {
+  margin: 0 0 20px;
+  padding: 14px 16px;
+  border-block: 1px solid var(--hair);
+  /* The top bar is taller on phones (it wraps), hence --top-clear. */
+  scroll-margin-top: calc(var(--top-clear, var(--top-h)) + 16px);
+}
+.net-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px 16px;
+}
+.net-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: var(--t-xs);
+  font-weight: 650;
+  white-space: nowrap;
+  justify-self: start;
+}
+.net-title {
+  margin: 0;
+  font-size: var(--t-md);
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.net-title:focus {
+  outline: none;
+}
+.net-title:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+.net-sub {
+  margin: 4px 0 0;
+  color: var(--text-3);
+  font-size: var(--t-xs);
+}
+.net-actions {
+  display: flex;
+  gap: 8px;
+}
+.net-details {
+  margin: 12px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--hair);
+  font-size: var(--t-sm);
+}
+.net-details dl {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+.net-row {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 12px;
+}
+.net-row dt {
+  color: var(--text-3);
+  font-weight: 600;
+}
+.net-row dd {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.net-dim {
+  color: var(--text-3);
+}
+.net-details > p {
+  margin: 12px 0 0;
+  font-size: var(--t-xs);
 }
 
 .banner {
@@ -885,8 +1008,13 @@ a {
   }
   .wordmark span,
   .nav-link span:not(.nav-count),
-  .rail-foot {
+  .net-chip-word {
     display: none;
+  }
+  .net-chip {
+    justify-content: center;
+    padding: 8px 0;
+    border-color: transparent;
   }
   .wordmark,
   .nav-link {
@@ -949,6 +1077,15 @@ a {
   }
   .page-head {
     align-items: flex-start;
+  }
+  .net-head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  :root {
+    --top-clear: 136px;
+  }
+  .net-panel {
+    padding-inline: 0;
   }
   .toolbar {
     flex-wrap: wrap;

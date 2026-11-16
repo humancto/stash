@@ -1,6 +1,7 @@
 //! stash: a personal put.io-style box.
 //! One binary: torrent engine (librqbit) + HTTP API + web UI.
 
+mod network;
 mod security;
 mod web;
 
@@ -82,6 +83,9 @@ async fn main() -> anyhow::Result<()> {
     .context("error creating torrent session")?;
 
     let api = Arc::new(Api::new(session, None));
+    let probe = Arc::new(network::NetworkProbe::new(network::ProbeConfig::public(
+        network::lookup_enabled_from(std::env::var("STASH_IP_LOOKUP").ok().as_deref()),
+    ))?);
 
     web::warn_if_unbuilt::<web::Dist>();
     let api_routes = Router::new()
@@ -90,7 +94,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/transfers/{id}/pause", post(pause))
         .route("/api/transfers/{id}/start", post(start))
         .route("/api/transfers/{id}/files/{file_id}", get(stream))
-        .with_state(api);
+        .with_state(api)
+        .merge(
+            Router::new()
+                .route("/api/network", get(network::handler))
+                .with_state(probe),
+        );
     // The web UI is the fallback; the guard goes last so it wraps everything.
     let app = web::attach::<web::Dist, ()>(api_routes)
         .layer(middleware::from_fn_with_state(guard_cfg, security::guard));

@@ -4,7 +4,9 @@ import { NavLink, Outlet, useLocation, useNavigate, useSearchParams } from "reac
 import { api } from "../lib/api";
 import { handleNavKey } from "../lib/keys";
 import { transfers, useTransfers } from "../lib/store";
+import { network } from "../lib/network";
 import { Logo } from "./Logo";
+import { NetworkChip } from "./NetworkStatus";
 import { RoomContext, type Room } from "./room";
 
 function NavLinks({ active }: { active: number }) {
@@ -134,10 +136,15 @@ export function Shell() {
 
   useEffect(() => {
     const stop = transfers.start();
-    const onVis = () => transfers.visibilityChanged();
+    const stopNetwork = network.start();
+    const onVis = () => {
+      transfers.visibilityChanged();
+      network.visibilityChanged();
+    };
     document.addEventListener("visibilitychange", onVis);
     return () => {
       stop();
+      stopNetwork();
       document.removeEventListener("visibilitychange", onVis);
     };
   }, []);
@@ -165,7 +172,9 @@ export function Shell() {
             <span>stash</span>
           </NavLink>
           <NavLinks active={active} />
-          <p className="rail-foot">Your box, your disk.</p>
+          <div className="rail-foot">
+            <NetworkChip />
+          </div>
         </nav>
         <div className="main">
           <header className="topbar">

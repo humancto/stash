@@ -18,30 +18,60 @@ const body = {
   ],
 };
 
+const netBody = {
+  verdict: "exposed",
+  checked_at: Math.floor(Date.now() / 1000),
+  lookup_enabled: true,
+  ipv4: { route: true, interface: "en0", tunnel: false, route_consistent: true, local_ip: "192.168.1.2", public_ip: "203.0.113.7", country: "US", error: null },
+  ipv6: { route: false },
+};
+
+/** Answers by URL, so the network poller doesn't get the transfers body. */
+const respond = (transfers: unknown = body) =>
+  vi.fn(async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    return new Response(JSON.stringify(url.startsWith("/api/network") ? netBody : transfers));
+  });
+
 describe("routing", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("deep links to a file page", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body))));
+    vi.stubGlobal("fetch", respond());
     render(<RouterProvider router={createMemoryRouter(routes, { initialEntries: ["/watch/0/0"] })} />);
     expect(await screen.findByRole("heading", { name: "Big Buck Bunny.mp4" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Download/ })).toHaveAttribute("href", "/api/transfers/0/files/0?download=1");
   });
 
   it("shows a clear page for a file that is gone", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body))));
+    vi.stubGlobal("fetch", respond());
     render(<RouterProvider router={createMemoryRouter(routes, { initialEntries: ["/watch/5/0"] })} />);
     expect(await screen.findByText("This file isn't here")).toBeInTheDocument();
   });
 
   it("redirects unknown routes to Files", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body))));
+    vi.stubGlobal("fetch", respond());
     render(<RouterProvider router={createMemoryRouter(routes, { initialEntries: ["/nope"] })} />);
     expect(await screen.findByRole("heading", { name: "Files" })).toBeInTheDocument();
   });
 
+  it("the rail chip shows the network verdict and links to the panel", async () => {
+    vi.stubGlobal("fetch", respond());
+    const router = createMemoryRouter(routes, { initialEntries: ["/files"] });
+    render(<RouterProvider router={router} />);
+    const chip = await screen.findByRole("link", { name: /Network: No VPN tunnel/ });
+    expect(chip).toHaveAttribute("href", "/transfers#network");
+    expect(chip).toHaveTextContent("No VPN");
+    expect(chip).not.toHaveTextContent("203.0.113.7");
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    await userEvent.click(chip);
+    expect(await screen.findByRole("heading", { name: /Peers see 203\.0\.113\.7 \(US\)/ })).toHaveFocus();
+    expect(scroll).toHaveBeenCalled();
+  });
+
   it("Escape on a deep-linked file page goes to Files", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body))));
+    vi.stubGlobal("fetch", respond());
     const router = createMemoryRouter(routes, { initialEntries: ["/watch/0/0"] });
     render(<RouterProvider router={router} />);
     await screen.findByRole("heading", { name: "Big Buck Bunny.mp4" });
@@ -50,7 +80,7 @@ describe("routing", () => {
   });
 
   it("Escape in the search box only leaves the search box", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body))));
+    vi.stubGlobal("fetch", respond());
     const router = createMemoryRouter(routes, { initialEntries: ["/files", "/watch/0/0"], initialIndex: 1 });
     render(<RouterProvider router={router} />);
     await screen.findByRole("heading", { name: "Big Buck Bunny.mp4" });

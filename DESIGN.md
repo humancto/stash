@@ -300,9 +300,14 @@ Calm, solid and legible from the sofa.
 
 ### Navigation
 
-- **Rail:** wordmark with the reel mark at top, then 44px nav links (20px icon, 12px gap) in faded print. Hover and current page both take the raised fill and print text; the current page is not amber. The footer line sits in dim print at label size.
+- **Rail:** wordmark with the reel mark at top, then 44px nav links (20px icon, 12px gap) in faded print. Hover and current page both take the raised fill and print text; the current page is not amber. The footer holds the network chip.
+- **Network chip:** rail footer, 40px, hairline border, 10px radius. A shield icon (shield-off for "No VPN") with a 7px status dot at its lower right, then the word at label size in the status colour: sage "VPN tunnel", coral "No VPN", dim "Checking", "Unknown" (failed or stale check) and "Offline". Never shows an IP. In the icon rail only the icon and dot show; on phones there is no chip.
 - **Segmented tabs:** a panel track with a 3px inset; the pressed tab is raised with the soft pressed shadow.
 - **Phone:** a fixed bottom tab bar with stacked icon and label, 52px targets.
+
+### Network panel
+
+The first block on Transfers (`#network`): a ruled band (hairlines above and below), not a card. A pill badge with the status word and dot, then the headline sentence at body size and weight 600 ("Peers see … stash's traffic leaves through utun4, which looks like a VPN tunnel."), then a dim label-size line with the check time and the kill-switch caveat. Details (disclosure) and Check again sit at the right. Details lists IPv4 and IPv6 as a two-column definition list. Wording is hedged: never "safe", never "your own IP".
 
 ### Reel
 
