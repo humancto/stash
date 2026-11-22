@@ -1,6 +1,7 @@
-import { ChevronDown, ChevronRight, Pause, Play } from "lucide-react";
-import { useState } from "react";
-import { Link } from "react-router";
+import { ChevronDown, ChevronRight, FileUp, Magnet, Pause, Play } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Link, useLocation } from "react-router";
+import { useAddAndGo } from "../components/Shell";
 import { ConfirmDelete } from "../components/ConfirmDelete";
 import { NetworkSummary, useWritesPaused } from "../components/NetworkStatus";
 import { Reel } from "../components/Reel";
@@ -159,8 +160,105 @@ function TransferRow({ t }: { t: Transfer }) {
   );
 }
 
+const ASKED_KEY = "stash.magnetHandlerAsked";
+
+function readAsked(): boolean {
+  try {
+    return localStorage.getItem(ASKED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** The browser can open magnet: links with stash (Chrome, Firefox, Edge on
+ * a secure context such as http://127.0.0.1; Safari has no such API). */
+export const canRegisterMagnet = () =>
+  "registerProtocolHandler" in navigator && window.isSecureContext;
+
+function AddTools() {
+  const addAndGo = useAddAndGo();
+  const writesPaused = useWritesPaused();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [asked, setAsked] = useState(readAsked);
+  const [registerError, setRegisterError] = useState<string | null>(null);
+
+  function register() {
+    try {
+      navigator.registerProtocolHandler(
+        "magnet",
+        `${location.origin}/add?uri=%s`,
+      );
+      setAsked(true);
+      setRegisterError(null);
+      try {
+        localStorage.setItem(ASKED_KEY, "1");
+      } catch {
+        // Private mode: the label just resets next time.
+      }
+    } catch {
+      setRegisterError("This browser refused to open magnet links with stash.");
+    }
+  }
+
+  return (
+    <div className="add-tools" data-rove>
+      <button
+        type="button"
+        className="btn btn--sm"
+        data-rove-item
+        aria-disabled={writesPaused ? true : undefined}
+        title={writesPaused ?? undefined}
+        onClick={() => fileRef.current?.click()}
+      >
+        <FileUp aria-hidden="true" />
+        Open .torrent
+      </button>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".torrent,application/x-bittorrent"
+        multiple
+        hidden
+        data-testid="torrent-input"
+        onChange={(e) => {
+          const files = [...(e.currentTarget.files ?? [])];
+          // Reset so choosing the same file again fires change again.
+          e.currentTarget.value = "";
+          if (files.length > 0) void addAndGo({ kind: "files", files });
+        }}
+      />
+      {canRegisterMagnet() && (
+        <button
+          type="button"
+          className="btn btn--sm"
+          data-rove-item
+          onClick={register}
+        >
+          <Magnet aria-hidden="true" />
+          {asked
+            ? "Asked your browser — check the address bar"
+            : "Open magnet links with stash"}
+        </button>
+      )}
+      {registerError && (
+        <p className="add-error" role="alert">
+          {registerError}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function Transfers() {
   const { transfers: list, loading, error } = useTransfers();
+  const location = useLocation();
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const added = (location.state as { added?: boolean } | null)?.added === true;
+  useEffect(() => {
+    // Arrived from an add: put focus on the page, not left on a control
+    // that no longer exists.
+    if (added) headingRef.current?.focus();
+  }, [added, location.key]);
   const sorted = [...list].sort((a, b) => b.id - a.id);
   const active = list.filter(
     (t) => t.stats?.state === "live" && !t.stats.finished,
@@ -170,7 +268,9 @@ export function Transfers() {
     <div className="page">
       <div className="page-head">
         <div>
-          <h1 className="page-title">Transfers</h1>
+          <h1 className="page-title" ref={headingRef} tabIndex={-1}>
+            Transfers
+          </h1>
           {!loading && (
             <p className="page-sub num">
               {list.length} {list.length === 1 ? "transfer" : "transfers"}
@@ -179,6 +279,7 @@ export function Transfers() {
           )}
         </div>
       </div>
+      <AddTools />
       <NetworkSummary />
       {error && (
         <div className="banner" role="alert">
@@ -210,7 +311,8 @@ export function Transfers() {
         <div className="empty">
           <h2>No transfers</h2>
           <p>
-            Paste a magnet link or a .torrent URL in the box above to start one.
+            Paste a magnet link or a .torrent URL in the box above, paste one
+            anywhere, or drop a .torrent file on the page.
           </p>
         </div>
       ) : (

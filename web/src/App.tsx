@@ -1,6 +1,7 @@
 import { createBrowserRouter, Navigate } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import { Shell } from "./components/Shell";
+import { AddConfirm } from "./views/AddConfirm";
 import { Files } from "./views/Files";
 import { Privacy } from "./views/Privacy";
 import { Transfers } from "./views/Transfers";
@@ -15,6 +16,7 @@ export const routes = [
       { path: "transfers", element: <Transfers /> },
       { path: "privacy", element: <Privacy /> },
       { path: "watch/:tid/:fid", element: <Watch /> },
+      { path: "add", element: <AddConfirm /> },
       { path: "*", element: <Navigate to="/files" replace /> },
     ],
   },

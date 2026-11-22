@@ -1,8 +1,9 @@
 import { ArrowDownToLine, Clapperboard, Plus, Search, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { NavLink, Outlet, useLocation, useNavigate, useSearchParams } from "react-router";
-import { api } from "../lib/api";
-import { handleNavKey } from "../lib/keys";
+import { adder, useAdder, type AddSource } from "../lib/adder";
+import { handleNavKey, isTypingTarget } from "../lib/keys";
+import { isTorrentFile, isTorrentLink } from "../lib/magnet";
 import { transfers, useTransfers } from "../lib/store";
 import { network } from "../lib/network";
 import { Logo } from "./Logo";
@@ -33,40 +34,38 @@ function NavLinks({ active }: { active: number }) {
   );
 }
 
+/** Adds, then shows the result: on a file page (maybe playing) it stays and
+ * says so; anywhere else it goes to Transfers. */
+export function useAddAndGo() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const onWatch = location.pathname.startsWith("/watch/");
+  return useCallback(
+    async (source: AddSource): Promise<boolean> => {
+      const ok = await adder.add(source);
+      if (!ok) return false;
+      if (onWatch) adder.setStatus("Added. It's on Transfers.");
+      else void navigate("/transfers", { state: { added: true } });
+      return true;
+    },
+    [navigate, onWatch],
+  );
+}
+
 function AddMagnet() {
   const [url, setUrl] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const navigate = useNavigate();
+  const { busy, error, status } = useAdder();
   const writesPaused = useWritesPaused();
+  const addAndGo = useAddAndGo();
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (writesPaused) {
-      setError(writesPaused);
-      return;
-    }
-    const value = url.trim();
-    if (!value) {
-      setError("Paste a magnet link or a .torrent URL first.");
-      document.getElementById("add-url")?.focus();
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      await transfers.mutate(() => api.add(value));
-      setUrl("");
-      navigate("/transfers");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not add that link.");
-    } finally {
-      setBusy(false);
-    }
+    if (!url.trim()) document.getElementById("add-url")?.focus();
+    if (await addAndGo({ kind: "url", url })) setUrl("");
   }
 
   return (
-    <form className="add" onSubmit={submit}>
+    <form className="add" onSubmit={(e) => void submit(e)}>
       <label className="visually-hidden" htmlFor="add-url">
         Magnet link or .torrent URL
       </label>
@@ -77,7 +76,7 @@ function AddMagnet() {
         value={url}
         onChange={(e) => {
           setUrl(e.target.value);
-          if (error) setError(null);
+          adder.clear();
         }}
         autoComplete="off"
         spellCheck={false}
@@ -96,7 +95,114 @@ function AddMagnet() {
           {error}
         </p>
       )}
+      <p className="visually-hidden" role="status">
+        {status ?? ""}
+      </p>
     </form>
+  );
+}
+
+/** Paste a magnet, info hash, .torrent URL or .torrent file anywhere that
+ * isn't a text field. */
+function usePasteToAdd() {
+  const addAndGo = useAddAndGo();
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      if (e.defaultPrevented || isTypingTarget(document.activeElement)) return;
+      const data = e.clipboardData;
+      if (!data) return;
+      const files = [...data.files];
+      if (files.length > 0) {
+        if (!files.some(isTorrentFile)) return;
+        e.preventDefault();
+        void addAndGo({ kind: "files", files });
+        return;
+      }
+      const text = data.getData("text/plain").trim();
+      if (!isTorrentLink(text)) return;
+      e.preventDefault();
+      void addAndGo({ kind: "url", url: text });
+    };
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  }, [addAndGo]);
+}
+
+/** Drop .torrent files, or a magnet/.torrent link from another app or tab. */
+function DropToAdd() {
+  const [over, setOver] = useState(false);
+  const addAndGo = useAddAndGo();
+  useEffect(() => {
+    let internal = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const hide = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      setOver(false);
+    };
+    const droppable = (e: DragEvent) => {
+      const types = e.dataTransfer?.types ?? [];
+      return !internal && (types.includes("Files") || types.includes("text/uri-list"));
+    };
+    const onDragStart = () => {
+      internal = true;
+    };
+    const onDragEnd = () => {
+      internal = false;
+    };
+    const onDragOver = (e: DragEvent) => {
+      if (!droppable(e)) return;
+      // Always: otherwise the browser opens the dropped file in this tab.
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+      setOver(true);
+      if (timer) clearTimeout(timer);
+      // dragover repeats while over the page; silence means it left.
+      timer = setTimeout(hide, 250);
+    };
+    const onDrop = (e: DragEvent) => {
+      if (!droppable(e)) return;
+      e.preventDefault();
+      hide();
+      const dt = e.dataTransfer;
+      if (!dt) return;
+      const files = [...dt.files];
+      if (files.length > 0) {
+        void addAndGo({ kind: "files", files });
+        return;
+      }
+      const link = (dt.getData("text/uri-list") || dt.getData("text/plain"))
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .find((l) => l && !l.startsWith("#"));
+      if (link && isTorrentLink(link)) void addAndGo({ kind: "url", url: link });
+      else adder.fail("Only .torrent files and magnet links can be dropped here.");
+    };
+    document.addEventListener("dragstart", onDragStart);
+    document.addEventListener("dragend", onDragEnd);
+    window.addEventListener("dragenter", onDragOver);
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("drop", onDrop);
+    window.addEventListener("blur", hide);
+    return () => {
+      if (timer) clearTimeout(timer);
+      document.removeEventListener("dragstart", onDragStart);
+      document.removeEventListener("dragend", onDragEnd);
+      window.removeEventListener("dragenter", onDragOver);
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("drop", onDrop);
+      window.removeEventListener("blur", hide);
+    };
+  }, [addAndGo]);
+  if (!over) return null;
+  return (
+    <div className="drop-overlay" aria-hidden="true" data-testid="drop-overlay">
+      <div className="drop-card">
+        <ArrowDownToLine />
+        <p>Drop to add</p>
+        <span>.torrent files or magnet links</span>
+      </div>
+    </div>
   );
 }
 
@@ -176,6 +282,7 @@ export function Shell() {
     else el.style.removeProperty("--screen");
   }, []);
   const room: Room = useMemo(() => ({ setScreen, setWatching }), [setScreen]);
+  usePasteToAdd();
 
   return (
     <RoomContext.Provider value={room}>
@@ -199,6 +306,7 @@ export function Shell() {
             <Outlet />
           </main>
         </div>
+        <DropToAdd />
         <nav className="tabbar" aria-label="Sections">
           <NavLinks active={active} />
         </nav>

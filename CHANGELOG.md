@@ -8,6 +8,8 @@
 - Local peer discovery is off whenever the kill switch is on.
 
 ### Added
+- Add by pasting anywhere, dropping `.torrent` files or magnet links on the page, or "Open .torrent"; stash can open the browser's `magnet:` links (with a confirm page at `/add`).
+- `POST /api/transfers` accepts a raw `.torrent` body (`application/x-bittorrent`) and bare info hashes; links are checked first, and `.torrent` URLs are downloaded by stash within the kill switch.
 - Delete one file of a transfer from the Files list or the file page (`DELETE /api/transfers/{id}/files/{n}`). The next start rechecks that transfer once.
 - `librqbit` is pinned to `=9.1.0` (file delete relies on its startup behaviour).
 - Seeding rule: stop when finished, until a ratio, for a time, or forever; "Seed" keeps one transfer seeding; upload totals that survive restarts.
