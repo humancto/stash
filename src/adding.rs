@@ -165,9 +165,10 @@ pub fn parse_link(raw: &str) -> Result<AddSource, AddError> {
 /// Is this URL's host this machine? Loopback traffic never leaves it, so it
 /// needs no tunnel (and can't go through one).
 fn is_loopback(url: &str) -> bool {
-    let Ok(u) = reqwest::Url::parse(url) else {
-        return false;
-    };
+    reqwest::Url::parse(url).is_ok_and(|u| is_loopback_url(&u))
+}
+
+fn is_loopback_url(u: &reqwest::Url) -> bool {
     let Some(host) = u.host_str() else {
         return false;
     };
@@ -179,18 +180,49 @@ fn is_loopback(url: &str) -> bool {
             .is_ok_and(|ip| ip.is_loopback())
 }
 
+const MAX_REDIRECTS: usize = 5;
+
+/// What a redirect hop may do. `stay_local`: the request is not bound to
+/// the VPN because it went to this machine, so it must not leave it.
+fn redirect_step(
+    target: &reqwest::Url,
+    hops: usize,
+    stay_local: bool,
+) -> Result<bool, &'static str> {
+    if target.scheme() == "magnet" {
+        // Indexers answer a .torrent link with a magnet: stop and use it.
+        return Ok(false);
+    }
+    if hops >= MAX_REDIRECTS {
+        return Err("too many redirects");
+    }
+    if stay_local && !is_loopback_url(target) {
+        return Err("a local link redirected off this machine while the VPN is required");
+    }
+    Ok(true)
+}
+
 /// Download a `.torrent`: 30 s, at most 5 redirects, at most 16 MB. When
 /// torrent traffic is bound to the VPN (`via`), so is this download, except
 /// for loopback hosts (local indexers such as Jackett). The caller refuses
 /// it when the kill switch blocks. The Origin guard keeps other web pages
 /// from driving this. Errors never include the URL (it may carry a passkey).
-pub async fn download(url: &str, via: Option<&str>) -> Result<Bytes, AddError> {
+pub async fn download(url: &str, via: Option<&str>) -> Result<AddSource, AddError> {
+    let local = is_loopback(url);
+    let stay_local = local && via.is_some();
+    let policy = reqwest::redirect::Policy::custom(move |attempt| {
+        match redirect_step(attempt.url(), attempt.previous().len(), stay_local) {
+            Ok(true) => attempt.follow(),
+            Ok(false) => attempt.stop(),
+            Err(why) => attempt.error(why),
+        }
+    });
     let mut builder = reqwest::Client::builder()
         .no_proxy()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::limited(5));
-    if let Some(iface) = via.filter(|_| !is_loopback(url)) {
+        .redirect(policy);
+    if let Some(iface) = via.filter(|_| !local) {
         builder = builder.interface(iface);
     }
     let client = builder
@@ -202,12 +234,30 @@ pub async fn download(url: &str, via: Option<&str>) -> Result<Bytes, AddError> {
         } else if e.is_connect() {
             "could not reach the server".into()
         } else if e.is_redirect() {
-            "too many redirects".into()
+            // Our own policy's message; never contains the URL.
+            std::error::Error::source(&e)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "redirect refused".into())
         } else {
             "the download failed".into()
         })
     };
     let mut resp = client.get(url).send().await.map_err(describe)?;
+    if resp.status().is_redirection() {
+        // Stopped by the policy: a redirect to a magnet link.
+        let location = resp
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        return match parse_link(location) {
+            Ok(m @ AddSource::Magnet(_)) => Ok(m),
+            _ => Err(AddError::Download(format!(
+                "HTTP {}",
+                resp.status().as_u16()
+            ))),
+        };
+    }
     if !resp.status().is_success() {
         return Err(AddError::Download(format!(
             "HTTP {}",
@@ -227,7 +277,7 @@ pub async fn download(url: &str, via: Option<&str>) -> Result<Bytes, AddError> {
         }
         body.extend_from_slice(&chunk);
     }
-    Ok(Bytes::from(body))
+    torrent_bytes(Bytes::from(body))
 }
 
 #[cfg(test)]
@@ -337,6 +387,58 @@ mod tests {
         assert!(is_loopback("http://[::1]/x.torrent"));
         assert!(!is_loopback("https://example.com/x.torrent"));
         assert!(!is_loopback("http://192.168.1.2/x.torrent"));
+    }
+
+    #[test]
+    fn redirects() {
+        let u = |s: &str| reqwest::Url::parse(s).unwrap();
+        let magnet = u("magnet:?xt=urn:btih:abc");
+        assert_eq!(redirect_step(&magnet, 0, true), Ok(false));
+        assert_eq!(redirect_step(&u("http://127.0.0.1/b"), 1, true), Ok(true));
+        assert!(redirect_step(&u("https://example.com/b"), 1, true).is_err());
+        assert_eq!(
+            redirect_step(&u("https://example.com/b"), 1, false),
+            Ok(true)
+        );
+        assert!(redirect_step(&u("https://example.com/b"), MAX_REDIRECTS, false).is_err());
+    }
+
+    /// A local indexer answering with a redirect to a magnet link.
+    #[tokio::test]
+    async fn redirect_to_magnet_is_used() {
+        use axum::{Router, http::header, response::IntoResponse, routing::get};
+        let app = Router::new()
+            .route(
+                "/away",
+                get(|| async {
+                    (
+                        axum::http::StatusCode::FOUND,
+                        [(header::LOCATION, "https://example.com/a.torrent")],
+                    )
+                        .into_response()
+                }),
+            )
+            .route(
+                "/dl",
+                get(|| async {
+                    (
+                        axum::http::StatusCode::FOUND,
+                        [(header::LOCATION, "magnet:?xt=urn:btih:abc")],
+                    )
+                        .into_response()
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let got = download(&format!("http://{addr}/dl"), None).await;
+        assert_eq!(got, Ok(AddSource::Magnet("magnet:?xt=urn:btih:abc".into())));
+        // With the VPN required, a local link may not send stash elsewhere.
+        let err = download(&format!("http://{addr}/away"), Some("utun-test")).await;
+        match err {
+            Err(AddError::Download(why)) => assert!(why.contains("off this machine"), "{why}"),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

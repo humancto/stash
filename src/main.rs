@@ -495,7 +495,7 @@ async fn add(
                 Binding::Bound { name, .. } => Some(name),
                 Binding::Unbound => None,
             };
-            adding::torrent_bytes(adding::download(&url, via.as_deref()).await?)?
+            adding::download(&url, via.as_deref()).await?
         }
         other => other,
     };
