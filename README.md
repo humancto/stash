@@ -58,6 +58,16 @@ By default stash stops sharing a transfer as soon as it finishes: it pauses it (
 - **Upgrade note:** transfers that were finished and seeding stop seeding a few seconds after you start this version, unless you pick "Keep seeding".
 - **Residual window:** librqbit resumes transfers when the session opens, and the rule's first check runs right after. A finished transfer can announce itself for a moment in between. stash records "finished" to disk at once so this window stays short, and pauses persist, so it only applies to transfers that were seeding when stash stopped.
 
+## Library
+
+The home page is a poster Library of the films and shows stash recognises in your file names (`Show.S01E02…`, `Film (2019) 1080p…`, season folders, anime numbering, site-prefixed names). Each title gets a typographic poster in its own colour; the newest playable one is in the spotlight.
+
+- A title page lists a film's versions (best quality first for Play) or a show's seasons and episodes. Play starts the best ready file, or streams one that is still downloading.
+- Filter by Films/Shows and Ready/Downloading, sort, or search (the search box searches the Library everywhere except Files).
+- "Hide from Library" removes a title from the posters (the files stay in Files); "Hidden (n)" at the bottom brings it back.
+- Nothing leaves your machine: names are read locally. Posters and details from TMDB are planned and will be off unless you turn them on.
+- `<STASH_STATE_DIR>/library.json` keeps when stash first saw each transfer (for "Recently added") and what you hid.
+
 ## Adding
 
 - **Paste** a magnet link, an info hash or a `.torrent` URL in the add box, or anywhere on the page outside a text field. A `.torrent` file copied in Finder can be pasted too. On a file page, stash adds it and keeps playing.
@@ -102,6 +112,8 @@ The rail and the top of Transfers show what torrent peers can see: the interface
 | DELETE | `/api/transfers/{id}`                  | Remove the transfer and its files     |
 | GET    | `/api/transfers/{id}/files/{n}`        | Stream (HTTP range); `?download=1` forces a download; `410` for a deleted file |
 | DELETE | `/api/transfers/{id}/files/{n}`        | Delete one file: `{"freed_bytes": n}`; `409` while checking or for the last file |
+| GET    | `/api/library`                         | Films and shows recognised in file names (titles, files, quality) |
+| POST / DELETE | `/api/library/{key}/hide`       | Hide / unhide a title in the Library  |
 | GET    | `/api/network`                         | What peers see (interface, tunnel, public IP); cached 30 s, `?refresh=1` forces a check (at most every 5 s) |
 
 Unknown `/api` paths return a `404` JSON error. Every other `GET` path returns the web UI, so app links such as `/watch/1/0` work when you open them directly.

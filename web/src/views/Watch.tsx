@@ -39,7 +39,7 @@ function useAmbientLight(video: HTMLMediaElement | null) {
   const room = useRoom();
 
   // The room keeps the light of the last film it showed (or the booth's
-  // slate default when none has played); only real frames change it.
+  // slate default when none has played); real frames (or a Library title hue) change it.
   useEffect(() => {
     room.setWatching(true);
     return () => room.setWatching(false);
@@ -86,10 +86,31 @@ function useAmbientLight(video: HTMLMediaElement | null) {
   }, [video, room]);
 }
 
+/** Where Back goes: the page that opened this file (a Library title, the
+ * Library), else Files. Only in-app paths are accepted. */
+export function backTarget(state: unknown): { path: string; label: string; fallback?: true } {
+  const fallback = { path: "/files", label: "Files", fallback: true as const };
+  if (typeof state !== "object" || state === null || !("from" in state)) return fallback;
+  const f = state.from;
+  if (typeof f !== "object" || f === null) return fallback;
+  const path = (f as { path?: unknown }).path;
+  const label = (f as { label?: unknown }).label;
+  if (typeof path !== "string" || typeof label !== "string") return fallback;
+  if (!(path === "/" || path === "/files" || /^\/title\/[a-z0-9%-]+$/.test(path))) return fallback;
+  return { path, label };
+}
+
 export function Watch() {
   const params = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const from = backTarget(location.state);
+  // After a delete: back to the title or Library that opened this file
+  // (they cope with it being gone), else to Files aimed past the row.
+  const leave = (filesState: object) => {
+    if (from.path !== "/files" && location.key !== "default") navigate(-1);
+    else navigate("/files", { replace: true, state: filesState });
+  };
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tid = Number(params["tid"]);
   const fid = Number(params["fid"]);
@@ -133,7 +154,7 @@ export function Watch() {
         return;
       e.preventDefault();
       // A deep link has no in-app history to go back to.
-      if (location.key === "default") navigate("/files");
+      if (location.key === "default") navigate(from.path);
       else navigate(-1);
     };
     window.addEventListener("keydown", onKey);
@@ -216,9 +237,21 @@ export function Watch() {
   return (
     <div className="watch">
       <div style={{ minWidth: 0 }}>
-        <Link className="back" to="/files">
+        <Link
+          className="back"
+          to={from.path}
+          onClick={(e) => {
+            // Back, not a new entry: keeps history and the poster's focus.
+            if (location.key !== "default") {
+              e.preventDefault();
+              navigate(-1);
+            }
+          }}
+        >
           <ArrowLeft aria-hidden="true" />
-          Files
+          {/* Opened from somewhere without a label (Transfers): Back goes
+              there, so don't promise Files. */}
+          {from.fallback && location.key !== "default" ? "Back" : from.label}
         </Link>
         <div className="screen">
           {playable && !failed ? (
@@ -351,10 +384,7 @@ export function Watch() {
               await api.removeFile(tid, fid);
               // Leave first: the next list would show this page's
               // "deleted" state for a frame. Files aims focus past this row.
-              navigate("/files", {
-                replace: true,
-                state: { focusList: true, deletedKey: `${tid}:${fid}` },
-              });
+              leave({ focusList: true, deletedKey: `${tid}:${fid}` });
               void transfers.refresh();
             }}
           />
@@ -366,7 +396,7 @@ export function Watch() {
           rove
           onConfirm={async () => {
             await transfers.mutate(() => api.remove(tid));
-            navigate("/files", { replace: true, state: { focusList: true } });
+            leave({ focusList: true });
           }}
         />
       </aside>

@@ -45,7 +45,13 @@ const settingsBody = {
 const respond = (transfers: unknown = body) =>
   vi.fn(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    const out = url.startsWith("/api/network") ? netBody : url.startsWith("/api/settings") ? settingsBody : transfers;
+    const out = url.startsWith("/api/network")
+      ? netBody
+      : url.startsWith("/api/settings")
+        ? settingsBody
+        : url.startsWith("/api/library")
+          ? { titles: [], pending: [], other_files: 0 }
+          : transfers;
     return new Response(JSON.stringify(out));
   });
 
@@ -65,10 +71,10 @@ describe("routing", () => {
     expect(await screen.findByText("This file isn't here")).toBeInTheDocument();
   });
 
-  it("redirects unknown routes to Files", async () => {
+  it("redirects unknown routes to the Library", async () => {
     vi.stubGlobal("fetch", respond());
     render(<RouterProvider router={createMemoryRouter(routes, { initialEntries: ["/nope"] })} />);
-    expect(await screen.findByRole("heading", { name: "Files" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Library" })).toBeInTheDocument();
   });
 
   it("the rail chip shows the network verdict and opens Privacy", async () => {
@@ -106,7 +112,7 @@ describe("routing", () => {
     const router = createMemoryRouter(routes, { initialEntries: ["/files", "/watch/0/0"], initialIndex: 1 });
     render(<RouterProvider router={router} />);
     await screen.findByRole("heading", { name: "Big Buck Bunny.mp4" });
-    await userEvent.click(screen.getByLabelText("Search files"));
+    await userEvent.click(screen.getByLabelText("Search library"));
     await userEvent.keyboard("{Escape}");
     expect(screen.getByRole("heading", { name: "Big Buck Bunny.mp4" })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/watch/0/0");

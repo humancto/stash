@@ -483,6 +483,16 @@ export const api = {
       body: file,
     });
   },
+  /** Raw library JSON; checked by `parseLibrary` in lib/library.ts. */
+  async library(): Promise<unknown> {
+    return request("/api/library");
+  },
+  async hideTitle(key: string): Promise<void> {
+    await request(`/api/library/${encodeURIComponent(key)}/hide`, { method: "POST" });
+  },
+  async unhideTitle(key: string): Promise<void> {
+    await request(`/api/library/${encodeURIComponent(key)}/hide`, { method: "DELETE" });
+  },
   async pause(id: number): Promise<void> {
     await request(`/api/transfers/${id}/pause`, { method: "POST" });
   },

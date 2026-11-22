@@ -3,6 +3,7 @@
 
 mod adding;
 mod filedelete;
+mod library;
 mod network;
 mod privacy;
 mod security;
@@ -105,10 +106,17 @@ impl IntoResponse for AppError {
 
 #[derive(Clone)]
 struct AppState {
+    library: Arc<LibraryStore>,
     api: Arc<Api>,
     probe: Arc<network::NetworkProbe>,
     privacy: Arc<Privacy>,
     seeding: Arc<seeding::Seeding>,
+}
+
+impl FromRef<AppState> for Arc<LibraryStore> {
+    fn from_ref(s: &AppState) -> Self {
+        s.library.clone()
+    }
 }
 
 impl FromRef<AppState> for Arc<seeding::Seeding> {
@@ -297,6 +305,7 @@ async fn main() -> anyhow::Result<()> {
     });
     let flush_on_exit = seeding.clone();
     let state = AppState {
+        library: Arc::new(LibraryStore::new(&base.state_dir)),
         api,
         probe,
         privacy,
@@ -315,6 +324,11 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/transfers/{id}/files/{file_id}",
             get(stream).delete(delete_file),
+        )
+        .route("/api/library", get(library_list))
+        .route(
+            "/api/library/{key}/hide",
+            post(library_hide).delete(library_unhide),
         )
         .route("/api/network", get(network::handler))
         .route(
@@ -457,6 +471,162 @@ async fn list(
         })
         .collect();
     Json(TransferList { torrents })
+}
+
+/// Library state on disk (`<state>/library.json`).
+struct LibraryStore {
+    path: PathBuf,
+    state: tokio::sync::Mutex<library::State>,
+}
+
+impl LibraryStore {
+    fn new(state_dir: &FsPath) -> Self {
+        let path = state_dir.join("library.json");
+        Self {
+            state: tokio::sync::Mutex::new(library::State::load(&path)),
+            path,
+        }
+    }
+
+    /// Save a snapshot off the async threads (fsync can be slow).
+    async fn save(&self, state: &library::State) {
+        let mut snapshot = state.clone();
+        let path = self.path.clone();
+        let saved = tokio::task::spawn_blocking(move || snapshot.save(&path)).await;
+        match saved {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!(error = %e, "could not save library.json"),
+            Err(e) => tracing::warn!(error = %e, "library.json save task failed"),
+        }
+    }
+}
+
+/// Every transfer with its selected, visible files (deleted, skipped,
+/// padding and hidden-attribute files left out).
+async fn library_input(api: &Api, seed: &seeding::Seeding) -> Vec<library::TransferIn> {
+    let resp = api.api_torrent_list_ext(ApiTorrentListOpts { with_stats: false });
+    // Deletions stash has recorded but librqbit may not have applied yet
+    // (a retried deselect) are left out too, as in the transfer list.
+    let deleted: std::collections::HashMap<String, Vec<usize>> = {
+        let state = seed.state.lock().await;
+        resp.torrents
+            .iter()
+            .map(|t| {
+                (
+                    t.info_hash.clone(),
+                    seeding::Seeding::deleted_files(&state, &t.info_hash),
+                )
+            })
+            .collect()
+    };
+    resp.torrents
+        .into_iter()
+        .filter_map(|t| {
+            let id = t.id?;
+            let gone = deleted.get(&t.info_hash).cloned().unwrap_or_default();
+            let details = api.api_torrent_details(TorrentIdOrHash::Id(id)).ok();
+            let name = details.as_ref().and_then(|d| d.name.clone());
+            let files = details.and_then(|d| d.files).map(|files| {
+                // A multi-file torrent's paths leave out its top folder (the
+                // torrent's name), which often names the show or film.
+                let single = files.len() == 1 && files[0].components.len() == 1;
+                files
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(fid, f)| {
+                        f.included
+                            && !f.attributes.padding
+                            && !f.attributes.hidden
+                            && !gone.contains(fid)
+                    })
+                    .map(|(fid, f)| library::FileIn {
+                        fid,
+                        components: match (&name, single) {
+                            (Some(n), false) => {
+                                std::iter::once(n.clone()).chain(f.components).collect()
+                            }
+                            _ => f.components,
+                        },
+                        length: f.length,
+                    })
+                    .collect()
+            });
+            Some(library::TransferIn {
+                tid: id,
+                info_hash: t.info_hash,
+                files,
+            })
+        })
+        .collect()
+}
+
+async fn library_list(
+    State(api): State<Arc<Api>>,
+    State(seed): State<Arc<seeding::Seeding>>,
+    State(lib): State<Arc<LibraryStore>>,
+) -> impl IntoResponse {
+    let transfers = library_input(&api, &seed).await;
+    let mut state = lib.state.lock().await;
+    let hashes: Vec<&str> = transfers.iter().map(|t| t.info_hash.as_str()).collect();
+    let pruned = library::prune(&mut state, &hashes);
+    if library::note_first_seen(&mut state, &hashes, seeding::unix_now()) || pruned {
+        lib.save(&state).await;
+    }
+    Json(library::build(&transfers, &state))
+}
+
+fn valid_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 200
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+async fn set_hidden(
+    api: &Api,
+    seed: &seeding::Seeding,
+    lib: &LibraryStore,
+    key: &str,
+    hide: bool,
+) -> Result<StatusCode> {
+    let missing = || {
+        AppError::Message(
+            StatusCode::NOT_FOUND,
+            "There is no such title in the Library.".into(),
+        )
+    };
+    if !valid_key(key) {
+        return Err(missing());
+    }
+    let ids = library::title_file_ids(&library_input(api, seed).await, key);
+    let mut state = lib.state.lock().await;
+    // Unhiding works for a title that is only remembered by its key.
+    let unknown = ids.is_empty() && (hide || !state.hidden_keys.contains(key));
+    if unknown {
+        return Err(missing());
+    }
+    library::set_hidden(&mut state, key, &ids, hide);
+    lib.save(&state).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn library_hide(
+    State(api): State<Arc<Api>>,
+    State(seed): State<Arc<seeding::Seeding>>,
+    State(lib): State<Arc<LibraryStore>>,
+    Path(key): Path<String>,
+) -> Result<StatusCode> {
+    set_hidden(&api, &seed, &lib, &key, true).await
+}
+
+async fn library_unhide(
+    State(api): State<Arc<Api>>,
+    State(seed): State<Arc<seeding::Seeding>>,
+    State(lib): State<Arc<LibraryStore>>,
+    Path(key): Path<String>,
+) -> Result<StatusCode> {
+    set_hidden(&api, &seed, &lib, &key, false).await
 }
 
 impl From<adding::AddError> for AppError {
@@ -888,5 +1058,96 @@ mod tests {
                 "{v}"
             );
         }
+    }
+
+    /// The Library handlers against a real (offline) session: list, hide,
+    /// unhide, unknown key, and library.json on disk.
+    #[tokio::test]
+    async fn library_handlers() {
+        use super::*;
+        use librqbit::SessionOptions;
+        let dir = tempfile::tempdir().unwrap();
+        let session = Session::new_with_opts(
+            dir.path().join("dl"),
+            SessionOptions {
+                dht: None,
+                listen: None,
+                persistence: None,
+                disable_trackers: true,
+                disable_local_service_discovery: true,
+                fastresume: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let api = Arc::new(Api::new(session, None));
+        let seed = Arc::new(seeding::Seeding::new(
+            seeding::Policy::Stop,
+            privacy::From_::Default,
+            dir.path(),
+            "boot",
+        ));
+        let lib = Arc::new(LibraryStore::new(dir.path()));
+        // A two-episode season pack.
+        let mut info = b"d5:filesl".to_vec();
+        for name in ["Friends.S01E01.mkv", "Friends.S01E02.mkv"] {
+            info.extend_from_slice(
+                format!("d6:lengthi1e4:pathl{}:{}ee", name.len(), name).as_bytes(),
+            );
+        }
+        info.extend_from_slice(b"e4:name11:Friends.S0112:piece lengthi16384e6:pieces20:");
+        info.extend_from_slice(&[0u8; 20]);
+        info.extend_from_slice(b"e");
+        let mut t = b"d4:info".to_vec();
+        t.extend_from_slice(&info);
+        t.extend_from_slice(b"e");
+        api.api_add_torrent(
+            AddTorrent::from_bytes(t),
+            Some(AddTorrentOptions {
+                paused: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+
+        let list = || async {
+            let resp = library_list(State(api.clone()), State(seed.clone()), State(lib.clone()))
+                .await
+                .into_response();
+            let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+                .await
+                .unwrap();
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()
+        };
+        let v = list().await;
+        assert_eq!(v["titles"][0]["key"], "show-friends", "{v}");
+        assert_eq!(v["titles"][0]["files"].as_array().unwrap().len(), 2);
+        assert_eq!(v["titles"][0]["hidden"], false);
+
+        assert_eq!(
+            set_hidden(&api, &seed, &lib, "show-friends", true)
+                .await
+                .ok(),
+            Some(StatusCode::NO_CONTENT)
+        );
+        assert_eq!(list().await["titles"][0]["hidden"], true);
+        let saved = std::fs::read_to_string(dir.path().join("library.json")).unwrap();
+        assert!(saved.contains("show-friends"), "{saved}");
+
+        assert!(
+            set_hidden(&api, &seed, &lib, "show-nope", true)
+                .await
+                .is_err()
+        );
+        assert!(set_hidden(&api, &seed, &lib, "../x", true).await.is_err());
+        assert_eq!(
+            set_hidden(&api, &seed, &lib, "show-friends", false)
+                .await
+                .ok(),
+            Some(StatusCode::NO_CONTENT)
+        );
+        assert_eq!(list().await["titles"][0]["hidden"], false);
     }
 }

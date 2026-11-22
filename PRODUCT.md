@@ -47,7 +47,7 @@ Name: stash. Structure may follow put.io (sidebar, Files, Transfers, file page w
 
 ## Evidence on Hand
 
-No posters, artwork or metadata service. Thumbnails do not exist until generated from video frames. Do not invent "added N days ago" dates or artwork the backend does not provide.
+No artwork or metadata service yet (TMDB lookups are planned, off by default). The Library recognises films and shows from file names and shows typographic posters. Thumbnails do not exist until generated from video frames. "Recently added" uses when stash first saw a transfer; do not invent other dates or artwork the backend does not provide.
 
 ## Product Principles
 
