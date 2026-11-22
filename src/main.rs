@@ -1,6 +1,7 @@
 //! stash: a personal put.io-style box.
 //! One binary: torrent engine (librqbit) + HTTP API + web UI.
 
+mod filedelete;
 mod network;
 mod privacy;
 mod security;
@@ -39,6 +40,35 @@ enum AppError {
     Unavailable,
     /// Strict kill switch with no VPN: adding can't find peers.
     NoVpn,
+    /// A plain error with a message for the UI.
+    Message(StatusCode, String),
+}
+
+impl From<seeding::DeleteError> for AppError {
+    fn from(e: seeding::DeleteError) -> Self {
+        use seeding::DeleteError as E;
+        match e {
+            E::Api(e) => Self::Api(e),
+            E::NoSuchFile => Self::Message(
+                StatusCode::NOT_FOUND,
+                "There is no such file in this transfer.".into(),
+            ),
+            E::Checking => Self::Message(
+                StatusCode::CONFLICT,
+                "stash is still checking this transfer's files. Try again in a moment.".into(),
+            ),
+            E::LastFile => Self::Message(
+                StatusCode::CONFLICT,
+                "This is the last file in the transfer. Delete the transfer instead.".into(),
+            ),
+            E::Disk(e) => Self::Message(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "stash won't download this file again, but it could not remove it from disk: {e}."
+                ),
+            ),
+        }
+    }
 }
 
 impl From<ApiError> for AppError {
@@ -65,6 +95,9 @@ impl IntoResponse for AppError {
                 })),
             )
                 .into_response(),
+            Self::Message(status, text) => {
+                (status, Json(serde_json::json!({ "human_readable": text }))).into_response()
+            }
         }
     }
 }
@@ -275,7 +308,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/transfers/{id}", get(details).delete(delete))
         .route("/api/transfers/{id}/pause", post(pause))
         .route("/api/transfers/{id}/start", post(start))
-        .route("/api/transfers/{id}/files/{file_id}", get(stream))
+        .route(
+            "/api/transfers/{id}/files/{file_id}",
+            get(stream).delete(delete_file),
+        )
         .route("/api/network", get(network::handler))
         .route(
             "/api/settings",
@@ -373,6 +409,8 @@ struct TransferItem {
     #[serde(flatten)]
     details: librqbit::api::TorrentDetailsResponse,
     seeding: seeding::TransferSeeding,
+    /// File ids deleted from this transfer.
+    deleted: Vec<usize>,
 }
 
 #[derive(serde::Serialize)]
@@ -406,7 +444,12 @@ async fn list(
         .map(|details| {
             let total = details.stats.as_ref().map_or(0, |s| s.total_bytes);
             let seeding = seed.view(&state, &details.info_hash, total);
-            TransferItem { details, seeding }
+            let deleted = seeding::Seeding::deleted_files(&state, &details.info_hash);
+            TransferItem {
+                details,
+                seeding,
+                deleted,
+            }
         })
         .collect();
     Json(TransferList { torrents })
@@ -475,6 +518,18 @@ async fn delete(
     Ok(Json(seed.user_delete(&api, id).await?))
 }
 
+/// Deletes one file of a transfer: never downloaded again, removed from disk.
+async fn delete_file(
+    State(api): State<Arc<Api>>,
+    State(privacy): State<Arc<Privacy>>,
+    State(seed): State<Arc<seeding::Seeding>>,
+    Path((id, file_id)): Path<(TorrentIdOrHash, usize)>,
+) -> Result<impl IntoResponse> {
+    let _writing = privacy.write_guard().await?;
+    let freed = seed.delete_file(&api, id, file_id).await?;
+    Ok(Json(serde_json::json!({ "freed_bytes": freed })))
+}
+
 /// Serves a file with HTTP range support. The stream reads straight from the
 /// torrent: if the requested bytes are not downloaded yet, librqbit bumps the
 /// priority of those pieces and the read waits for them. That is what makes
@@ -485,6 +540,18 @@ async fn stream(
     RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Result<Response> {
+    // A deleted file is refused before streaming: a live stream fetches the
+    // pieces it reads even when the file is not selected.
+    if api
+        .mgr_handle(id)?
+        .only_files()
+        .is_some_and(|o| !o.contains(&file_id))
+    {
+        return Err(AppError::Message(
+            StatusCode::GONE,
+            "This file was deleted.".into(),
+        ));
+    }
     let mut file = api.api_stream(id, file_id).await?;
     let len = file.len();
 

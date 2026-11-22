@@ -8,7 +8,7 @@
 //! Lock order everywhere: the privacy write gate, then the seeding lock.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     io::Write,
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
@@ -21,7 +21,10 @@ use librqbit::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::privacy::{From_, Privacy};
+use crate::{
+    filedelete,
+    privacy::{From_, Privacy},
+};
 
 const TICK: Duration = Duration::from_secs(2);
 const SAVE_EVERY: Duration = Duration::from_secs(10);
@@ -159,6 +162,23 @@ pub struct SeedState {
     pub keep_seeding: BTreeSet<String>,
     #[serde(default)]
     pub torrents: BTreeMap<String, Entry>,
+    /// Files deleted from a transfer: hash → file id → progress.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub deleted: BTreeMap<String, BTreeMap<usize, Deletion>>,
+    /// Transfers whose next start rechecks every piece (a file was deleted):
+    /// hash → boot id of the process that deleted it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub recheck_pending: BTreeMap<String, String>,
+}
+
+/// A file deletion: recorded before anything changes, done once the file is
+/// off the disk. A pending one left by a crash or re-exec is finished by the
+/// enforcer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Deletion {
+    Pending,
+    Done,
 }
 
 impl SeedState {
@@ -223,6 +243,8 @@ pub struct View {
     /// Initializing and not paused: about to go live.
     pub starting: bool,
     pub total_bytes: u64,
+    /// A file was deleted, so this start rechecks every piece.
+    pub recheck_pending: bool,
 }
 
 pub fn decide(policy: Policy, keep: bool, e: &Entry, v: &View, now: u64) -> Verdict {
@@ -231,7 +253,9 @@ pub fn decide(policy: Policy, keep: bool, e: &Entry, v: &View, now: u64) -> Verd
     }
     // While initializing, `finished` is not known yet; a torrent stash has
     // already seen finished is paused before it can announce as a seeder.
-    let finished = v.finished || (v.starting && e.finished_at.is_some());
+    // Not while a recheck is pending: pausing then aborts the check and
+    // leaves the transfer unverified (nothing in it could stream).
+    let finished = v.finished || (v.starting && !v.recheck_pending && e.finished_at.is_some());
     if (v.live || v.starting) && finished && done(policy, e, v.total_bytes, now) {
         Verdict::Pause
     } else {
@@ -246,6 +270,8 @@ pub struct Seeding {
     pub state: tokio::sync::Mutex<SeedState>,
     path: PathBuf,
     boot: String,
+    /// Transfers whose placeholders were cleaned this boot.
+    cleaned: std::sync::Mutex<HashSet<String>>,
 }
 
 #[derive(Serialize)]
@@ -264,13 +290,45 @@ fn live_uploaded(st: &librqbit::TorrentStats) -> Option<u64> {
     matches!(st.state, TorrentStatsState::Live).then_some(st.uploaded_bytes)
 }
 
-fn view_of(st: &librqbit::TorrentStats) -> View {
+fn view_of(st: &librqbit::TorrentStats, recheck_pending: bool) -> View {
     View {
         finished: st.finished,
         live: matches!(st.state, TorrentStatsState::Live),
         starting: matches!(st.state, TorrentStatsState::Initializing { paused: false }),
         total_bytes: st.total_bytes,
+        recheck_pending,
     }
+}
+
+/// Why deleting one file was refused.
+#[derive(Debug)]
+pub enum DeleteError {
+    Api(librqbit::ApiError),
+    NoSuchFile,
+    /// Initializing or metadata not resolved yet.
+    Checking,
+    LastFile,
+    /// Deselected, but the file on disk was left alone.
+    Disk(filedelete::Refused),
+}
+
+impl From<librqbit::ApiError> for DeleteError {
+    fn from(e: librqbit::ApiError) -> Self {
+        Self::Api(e)
+    }
+}
+
+/// Should the enforcer restart a transfer to fetch pieces it lost in the
+/// recheck after a file delete? Only one the rule had stopped (never one
+/// the user paused), once the recheck is over.
+pub fn needs_repair(
+    has_deletions: bool,
+    paused: bool,
+    finished: bool,
+    stopped_by_rule: bool,
+    recheck_pending: bool,
+) -> bool {
+    has_deletions && paused && !finished && stopped_by_rule && !recheck_pending
 }
 
 /// "Already paused" from librqbit is success; checked by state, not text.
@@ -291,6 +349,7 @@ impl Seeding {
             state: tokio::sync::Mutex::new(SeedState::load(&path)),
             path,
             boot: boot.to_string(),
+            cleaned: Default::default(),
         }
     }
 
@@ -415,10 +474,196 @@ impl Seeding {
         let resp = api.api_torrent_action_delete(id).await?;
         let a = s.torrents.remove(&hash).is_some();
         let b = s.keep_seeding.remove(&hash);
-        if a || b {
+        // A re-added transfer with the same hash starts clean: its files are
+        // never treated as deleted.
+        let c = s.deleted.remove(&hash).is_some();
+        let d = s.recheck_pending.remove(&hash).is_some();
+        if a || b || c || d {
             self.save(&s).await;
         }
         Ok(resp)
+    }
+
+    /// File ids deleted from this transfer, for the UI.
+    pub fn deleted_files(s: &SeedState, hash: &str) -> Vec<usize> {
+        s.deleted
+            .get(hash)
+            .map(|m| m.keys().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// A user's (or a resumed) delete of one file. The caller holds the
+    /// privacy write guard. Order: record the intent, deselect, remove from
+    /// disk, mark done; the seeding lock is held for the first two only.
+    /// Returns the bytes freed on disk.
+    pub async fn delete_file(
+        &self,
+        api: &Api,
+        id: TorrentIdOrHash,
+        fid: usize,
+    ) -> Result<u64, DeleteError> {
+        let (hash, root, rel, len) = {
+            let mut s = self.state.lock().await;
+            let h = api.mgr_handle(id)?;
+            let hash = h.info_hash().as_string();
+            if matches!(h.stats().state, TorrentStatsState::Initializing { .. }) {
+                return Err(DeleteError::Checking);
+            }
+            let files = h
+                .with_metadata(|m| m.file_infos.clone())
+                .map_err(|_| DeleteError::Checking)?;
+            let f = files
+                .get(fid)
+                .filter(|f| !f.attrs.padding)
+                .ok_or(DeleteError::NoSuchFile)?;
+            let included: Vec<usize> = h.only_files().unwrap_or_else(|| (0..files.len()).collect());
+            let is_included = included.contains(&fid);
+            let state = s.deleted.get(&hash).and_then(|m| m.get(&fid)).copied();
+            if !is_included && state != Some(Deletion::Pending) {
+                // Already deleted (or never selected): nothing to do. The
+                // path is never touched again, it may hold pieces a kept
+                // neighbour still needs.
+                return Ok(0);
+            }
+            if is_included {
+                let others = included
+                    .iter()
+                    .any(|&o| o != fid && files.get(o).is_some_and(filedelete::visible));
+                if !others {
+                    return Err(DeleteError::LastFile);
+                }
+            }
+            s.deleted
+                .entry(hash.clone())
+                .or_default()
+                .insert(fid, Deletion::Pending);
+            s.recheck_pending.insert(hash.clone(), self.boot.clone());
+            self.save(&s).await;
+            if is_included {
+                let keep: std::collections::HashSet<usize> =
+                    included.into_iter().filter(|&o| o != fid).collect();
+                api.api_torrent_action_update_only_files(id, &keep).await?;
+            }
+            (
+                hash,
+                h.output_folder().to_path_buf(),
+                f.relative_filename.clone(),
+                f.len,
+            )
+        };
+        let result = tokio::task::spawn_blocking(move || filedelete::remove(&root, &rel, len))
+            .await
+            .unwrap_or_else(|e| Err(filedelete::Refused::Io(std::io::Error::other(e))));
+        let mut s = self.state.lock().await;
+        // Done either way: a refused path is left alone (and reported), not
+        // retried forever. Gone if the transfer was deleted meanwhile.
+        if let Some(d) = s.deleted.get_mut(&hash).and_then(|m| m.get_mut(&fid)) {
+            *d = Deletion::Done;
+        }
+        self.save(&s).await;
+        match result {
+            Ok(freed) => {
+                tracing::info!(info_hash = %hash, file = fid, freed, "deleted a file");
+                Ok(freed)
+            }
+            Err(e) => {
+                tracing::warn!(info_hash = %hash, file = fid, error = %e, "deselected a file but left it on disk");
+                Err(DeleteError::Disk(e))
+            }
+        }
+    }
+
+    /// After a delete: finish pending deletions, remove 0-byte placeholders
+    /// librqbit recreated (once per boot), and restart a rule-stopped
+    /// transfer that lost pieces in its recheck.
+    async fn tend_deletions(&self, privacy: &Privacy, api: &Api, work: Vec<DeletionWork>) {
+        for w in work {
+            let Ok(id20) = w.hash.parse() else { continue };
+            let id = TorrentIdOrHash::Hash(id20);
+            for fid in w.pending {
+                let Ok(_writing) = privacy.write_guard().await else {
+                    return;
+                };
+                match self.delete_file(api, id, fid).await {
+                    Ok(_) | Err(DeleteError::Disk(_)) => {}
+                    Err(DeleteError::Checking) => {}
+                    Err(DeleteError::LastFile | DeleteError::NoSuchFile) => {
+                        // Can't be done: forget the intent.
+                        let mut s = self.state.lock().await;
+                        if let Some(m) = s.deleted.get_mut(&w.hash) {
+                            m.remove(&fid);
+                            if m.is_empty() {
+                                s.deleted.remove(&w.hash);
+                            }
+                        }
+                        self.save(&s).await;
+                    }
+                    Err(DeleteError::Api(e)) => {
+                        tracing::warn!(info_hash = %w.hash, file = fid, error = %e, "could not finish a file delete; will retry");
+                    }
+                }
+            }
+            if w.clean
+                && self
+                    .cleaned
+                    .lock()
+                    .expect("BUG: cleaned lock poisoned")
+                    .insert(w.hash.clone())
+            {
+                let Ok(h) = api.mgr_handle(id) else { continue };
+                let Ok(files) = h.with_metadata(|m| m.file_infos.clone()) else {
+                    continue;
+                };
+                let included: Vec<usize> =
+                    h.only_files().unwrap_or_else(|| (0..files.len()).collect());
+                let root = h.output_folder().to_path_buf();
+                let rels: Vec<_> = w
+                    .done
+                    .iter()
+                    .filter(|&&fid| {
+                        !included.contains(&fid)
+                            && !filedelete::shares_selected_piece(&files, fid, &included)
+                    })
+                    .filter_map(|&fid| files.get(fid).map(|f| f.relative_filename.clone()))
+                    .collect();
+                let hash = w.hash.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    for rel in rels {
+                        if let Err(e) = filedelete::remove_placeholder(&root, &rel) {
+                            tracing::debug!(info_hash = %hash, error = %e, "left a placeholder");
+                        }
+                    }
+                })
+                .await;
+            }
+            if w.repair && privacy.can_add() {
+                let Ok(_writing) = privacy.write_guard().await else {
+                    return;
+                };
+                // Re-checked under the lock: the user may have acted since.
+                let s = self.state.lock().await;
+                let Ok(h) = api.mgr_handle(id) else { continue };
+                let st = h.stats();
+                let e = s.torrents.get(&w.hash).cloned().unwrap_or_default();
+                if !needs_repair(
+                    true,
+                    matches!(st.state, TorrentStatsState::Paused),
+                    st.finished,
+                    e.stopped_by_rule,
+                    s.recheck_pending.contains_key(&w.hash),
+                ) {
+                    continue;
+                }
+                match api.api_torrent_action_start(id).await {
+                    Ok(_) => {
+                        tracing::info!(info_hash = %w.hash, "fetching pieces lost after a file delete")
+                    }
+                    Err(err) => {
+                        tracing::warn!(info_hash = %w.hash, error = %err, "could not restart to fetch lost pieces; will retry")
+                    }
+                }
+            }
+        }
     }
 
     /// One enforcer pass. Every stats read happens under the seeding lock
@@ -435,6 +680,7 @@ impl Seeding {
         let (policy, _) = self.policy();
         let now = unix_now();
         let mut candidates = Vec::new();
+        let mut work = Vec::new();
         {
             let mut s = self.state.lock().await;
             let mut dirty = false;
@@ -455,8 +701,52 @@ impl Seeding {
                     urgent = true;
                 }
                 dirty |= *e != before;
+                let initializing = matches!(st.state, TorrentStatsState::Initializing { .. });
+                if !initializing
+                    && s.recheck_pending
+                        .get(&hash)
+                        .is_some_and(|b| *b != self.boot)
+                {
+                    // That start's recheck is over.
+                    s.recheck_pending.remove(&hash);
+                    dirty = true;
+                }
+                let recheck = s.recheck_pending.contains_key(&hash);
+                if let Some(m) = s.deleted.get(&hash)
+                    && !initializing
+                {
+                    let stopped = s.torrents.get(&hash).is_some_and(|e| e.stopped_by_rule);
+                    work.push(DeletionWork {
+                        hash: hash.clone(),
+                        pending: m
+                            .iter()
+                            .filter(|(_, d)| **d == Deletion::Pending)
+                            .map(|(f, _)| *f)
+                            .collect(),
+                        done: m
+                            .iter()
+                            .filter(|(_, d)| **d == Deletion::Done)
+                            .map(|(f, _)| *f)
+                            .collect(),
+                        clean: true,
+                        repair: needs_repair(
+                            true,
+                            matches!(st.state, TorrentStatsState::Paused),
+                            st.finished,
+                            stopped,
+                            recheck,
+                        ),
+                    });
+                }
                 let keep = s.keep_seeding.contains(&hash);
-                if decide(policy, keep, &s.torrents[&hash], &view_of(&st), now) == Verdict::Pause {
+                if decide(
+                    policy,
+                    keep,
+                    &s.torrents[&hash],
+                    &view_of(&st, recheck),
+                    now,
+                ) == Verdict::Pause
+                {
                     candidates.push(hash);
                 }
             }
@@ -477,9 +767,10 @@ impl Seeding {
             let st = h.stats();
             let (policy, _) = self.policy();
             let keep = s.keep_seeding.contains(&hash);
+            let recheck = s.recheck_pending.contains_key(&hash);
             let e = s.torrents.entry(hash.clone()).or_default();
             e.account(&self.boot, live_uploaded(&st));
-            if decide(policy, keep, e, &view_of(&st), unix_now()) != Verdict::Pause {
+            if decide(policy, keep, e, &view_of(&st, recheck), unix_now()) != Verdict::Pause {
                 continue;
             }
             let uploaded = e.uploaded();
@@ -501,7 +792,17 @@ impl Seeding {
             self.save(&s).await;
             *last_save = std::time::Instant::now();
         }
+        self.tend_deletions(privacy, api, work).await;
     }
+}
+
+/// One transfer's file-deletion chores for this pass.
+struct DeletionWork {
+    hash: String,
+    pending: Vec<usize>,
+    done: Vec<usize>,
+    clean: bool,
+    repair: bool,
 }
 
 /// Enforcer task: a pass at once (the session has just resumed torrents),
@@ -637,7 +938,75 @@ mod tests {
             live,
             starting,
             total_bytes: 1000,
+            recheck_pending: false,
         }
+    }
+
+    #[test]
+    fn recheck_is_never_aborted() {
+        let now = 10_000;
+        let starting = view(false, false, true);
+        assert_eq!(
+            decide(Policy::Stop, false, &entry(0, Some(now)), &starting, now),
+            Verdict::Pause,
+            "known finished: paused before it announces"
+        );
+        let rechecking = View {
+            recheck_pending: true,
+            ..view(false, false, true)
+        };
+        assert_eq!(
+            decide(Policy::Stop, false, &entry(0, Some(now)), &rechecking, now),
+            Verdict::Leave,
+            "a file was deleted: let the recheck finish"
+        );
+        // Once it is live and finished again, the rule applies as usual.
+        let live_done = View {
+            recheck_pending: true,
+            ..view(true, true, false)
+        };
+        assert_eq!(
+            decide(Policy::Stop, false, &entry(0, Some(now)), &live_done, now),
+            Verdict::Pause
+        );
+    }
+
+    #[test]
+    fn repair_only_rule_stopped() {
+        assert!(needs_repair(true, true, false, true, false));
+        assert!(
+            !needs_repair(true, true, false, false, false),
+            "user paused"
+        );
+        assert!(!needs_repair(true, true, true, true, false), "finished");
+        assert!(!needs_repair(true, false, false, true, false), "live");
+        assert!(
+            !needs_repair(true, true, false, true, true),
+            "recheck pending"
+        );
+        assert!(
+            !needs_repair(false, true, false, true, false),
+            "no deletions"
+        );
+    }
+
+    #[test]
+    fn deletions_round_trip() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("seeding.json");
+        // A file from before this feature loads.
+        std::fs::write(&p, br#"{"keep_seeding":[],"torrents":{}}"#).unwrap();
+        assert_eq!(SeedState::load(&p), SeedState::default());
+        let mut s = SeedState::default();
+        s.deleted
+            .entry("h".into())
+            .or_default()
+            .insert(3, Deletion::Pending);
+        s.recheck_pending.insert("h".into(), "boot".into());
+        s.save(&p).unwrap();
+        assert_eq!(SeedState::load(&p), s);
+        let raw = std::fs::read_to_string(&p).unwrap();
+        assert!(raw.contains(r#""3": "pending""#), "{raw}");
     }
 
     #[test]
