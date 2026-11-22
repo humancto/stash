@@ -254,8 +254,11 @@ pub fn decide(policy: Policy, keep: bool, e: &Entry, v: &View, now: u64) -> Verd
     // While initializing, `finished` is not known yet; a torrent stash has
     // already seen finished is paused before it can announce as a seeder.
     // Not while a recheck is pending: pausing then aborts the check and
-    // leaves the transfer unverified (nothing in it could stream).
-    let finished = v.finished || (v.starting && !v.recheck_pending && e.finished_at.is_some());
+    // leaves the transfer unverified (nothing in it could stream). Not when
+    // the rule had stopped it either: then it was only live because stash
+    // restarted it to fetch pieces lost after a file delete.
+    let finished = v.finished
+        || (v.starting && !v.recheck_pending && !e.stopped_by_rule && e.finished_at.is_some());
     if (v.live || v.starting) && finished && done(policy, e, v.total_bytes, now) {
         Verdict::Pause
     } else {
@@ -959,6 +962,16 @@ mod tests {
             decide(Policy::Stop, false, &entry(0, Some(now)), &rechecking, now),
             Verdict::Leave,
             "a file was deleted: let the recheck finish"
+        );
+        // Restarted by stash to fetch lost pieces (rule-stopped): not paused
+        // at the next start before it knows whether it finished.
+        let repairing = Entry {
+            stopped_by_rule: true,
+            ..entry(0, Some(now))
+        };
+        assert_eq!(
+            decide(Policy::Stop, false, &repairing, &starting, now),
+            Verdict::Leave
         );
         // Once it is live and finished again, the rule applies as usual.
         let live_done = View {
