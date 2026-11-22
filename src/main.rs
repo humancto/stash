@@ -3,6 +3,7 @@
 
 mod adding;
 mod filedelete;
+mod library;
 mod network;
 mod privacy;
 mod security;
@@ -105,10 +106,17 @@ impl IntoResponse for AppError {
 
 #[derive(Clone)]
 struct AppState {
+    library: Arc<LibraryStore>,
     api: Arc<Api>,
     probe: Arc<network::NetworkProbe>,
     privacy: Arc<Privacy>,
     seeding: Arc<seeding::Seeding>,
+}
+
+impl FromRef<AppState> for Arc<LibraryStore> {
+    fn from_ref(s: &AppState) -> Self {
+        s.library.clone()
+    }
 }
 
 impl FromRef<AppState> for Arc<seeding::Seeding> {
@@ -297,6 +305,7 @@ async fn main() -> anyhow::Result<()> {
     });
     let flush_on_exit = seeding.clone();
     let state = AppState {
+        library: Arc::new(LibraryStore::new(&base.state_dir)),
         api,
         probe,
         privacy,
@@ -315,6 +324,11 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/transfers/{id}/files/{file_id}",
             get(stream).delete(delete_file),
+        )
+        .route("/api/library", get(library_list))
+        .route(
+            "/api/library/{key}/hide",
+            post(library_hide).delete(library_unhide),
         )
         .route("/api/network", get(network::handler))
         .route(
@@ -457,6 +471,127 @@ async fn list(
         })
         .collect();
     Json(TransferList { torrents })
+}
+
+/// Library state on disk (`<state>/library.json`).
+struct LibraryStore {
+    path: PathBuf,
+    state: tokio::sync::Mutex<library::State>,
+}
+
+impl LibraryStore {
+    fn new(state_dir: &FsPath) -> Self {
+        let path = state_dir.join("library.json");
+        Self {
+            state: tokio::sync::Mutex::new(library::State::load(&path)),
+            path,
+        }
+    }
+
+    fn save(&self, state: &mut library::State) {
+        if let Err(e) = state.save(&self.path) {
+            tracing::warn!(error = %e, "could not save library.json");
+        }
+    }
+}
+
+/// Every transfer with its selected, visible files (deleted, skipped,
+/// padding and hidden-attribute files left out).
+fn library_input(api: &Api) -> Vec<library::TransferIn> {
+    let resp = api.api_torrent_list_ext(ApiTorrentListOpts { with_stats: false });
+    resp.torrents
+        .into_iter()
+        .filter_map(|t| {
+            let id = t.id?;
+            let files = api
+                .api_torrent_details(TorrentIdOrHash::Id(id))
+                .ok()
+                .and_then(|d| d.files)
+                .map(|files| {
+                    files
+                        .into_iter()
+                        .enumerate()
+                        .filter(|(_, f)| {
+                            f.included && !f.attributes.padding && !f.attributes.hidden
+                        })
+                        .map(|(fid, f)| library::FileIn {
+                            fid,
+                            components: f.components,
+                            length: f.length,
+                        })
+                        .collect()
+                });
+            Some(library::TransferIn {
+                tid: id,
+                info_hash: t.info_hash,
+                files,
+            })
+        })
+        .collect()
+}
+
+async fn library_list(
+    State(api): State<Arc<Api>>,
+    State(lib): State<Arc<LibraryStore>>,
+) -> impl IntoResponse {
+    let transfers = library_input(&api);
+    let mut state = lib.state.lock().await;
+    let hashes: Vec<&str> = transfers.iter().map(|t| t.info_hash.as_str()).collect();
+    let pruned = library::prune(&mut state, &hashes);
+    if library::note_first_seen(&mut state, &hashes, seeding::unix_now()) || pruned {
+        lib.save(&mut state);
+    }
+    Json(library::build(&transfers, &state))
+}
+
+fn valid_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 200
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+async fn set_hidden(api: &Api, lib: &LibraryStore, key: &str, hide: bool) -> Result<StatusCode> {
+    let missing = || {
+        AppError::Message(
+            StatusCode::NOT_FOUND,
+            "There is no such title in the Library.".into(),
+        )
+    };
+    if !valid_key(key) {
+        return Err(missing());
+    }
+    let ids = library::title_file_ids(&library_input(api), key);
+    if ids.is_empty() {
+        return Err(missing());
+    }
+    let mut state = lib.state.lock().await;
+    for id in ids {
+        if hide {
+            state.hidden.insert(id);
+        } else {
+            state.hidden.remove(&id);
+        }
+    }
+    lib.save(&mut state);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn library_hide(
+    State(api): State<Arc<Api>>,
+    State(lib): State<Arc<LibraryStore>>,
+    Path(key): Path<String>,
+) -> Result<StatusCode> {
+    set_hidden(&api, &lib, &key, true).await
+}
+
+async fn library_unhide(
+    State(api): State<Arc<Api>>,
+    State(lib): State<Arc<LibraryStore>>,
+    Path(key): Path<String>,
+) -> Result<StatusCode> {
+    set_hidden(&api, &lib, &key, false).await
 }
 
 impl From<adding::AddError> for AppError {
