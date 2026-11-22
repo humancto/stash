@@ -102,6 +102,17 @@ describe("files list", () => {
     expect(kindOf("noext")).toBe("other");
     expect(swatch("x")).toBe(swatch("x"));
     expect(swatch("x")).not.toBe(swatch("y"));
+    // Slate to teal only: gold is the accent, never a swatch.
+    for (let i = 0; i < 500; i++) {
+      const m = /^hsl\((\d+) (\d+)% (\d+)%\)$/.exec(swatch(`file-${i}-${(i * 7919) % 1013}.mkv`));
+      expect(m).not.toBeNull();
+      const [hue, sat, light] = [Number(m![1]), Number(m![2]), Number(m![3])];
+      expect(hue).toBeGreaterThanOrEqual(190);
+      expect(hue).toBeLessThanOrEqual(229);
+      expect(sat).toBe(24);
+      expect(light).toBeGreaterThanOrEqual(22);
+      expect(light).toBeLessThanOrEqual(33);
+    }
   });
 });
 
