@@ -5,7 +5,8 @@
 @property --screen {
   syntax: "<color>";
   inherits: true;
-  initial-value: rgb(120 96 22);
+  /* Slate until a film plays: gold stays the one lamp. */
+  initial-value: rgb(52 72 92);
 }
 
 :root {
@@ -20,15 +21,16 @@
   --text-2: #c9cdd2;
   --text-3: #9aa3ae;
   --amber: #e0b420;
-  --amber-hover: color-mix(in srgb, #e0b420 88%, #fff);
+  --amber-hover: color-mix(in srgb, var(--amber) 88%, #fff);
   --amber-ink: #1a1400;
   --ready: #5cc99a;
   --danger: #d3675a;
-  --danger-ground: color-mix(in srgb, #d3675a 16%, #0f1419);
+  --danger-ground: color-mix(in srgb, var(--danger) 16%, var(--ground));
   --danger-text: #f0c4bd;
+  --danger-ink: #1a0a07;
 
-  --font: "Instrument Sans Variable", "Instrument Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font: "Instrument Sans Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
   --t-xs: 0.8125rem; /* 13 */
   --t-sm: 0.875rem; /* 14 */
   --t-md: 1rem; /* 16 */
@@ -169,11 +171,13 @@ a {
 .btn--danger:focus-visible {
   background: var(--danger-ground);
   border-color: var(--danger);
+  /* danger on danger-ground is 4.3:1; the light text keeps AA. */
+  color: var(--danger-text);
 }
 .btn--danger-solid {
   background: var(--danger);
   border-color: var(--danger);
-  color: #1a0a07;
+  color: var(--danger-ink);
   font-weight: 650;
 }
 .btn--sm {
@@ -1194,6 +1198,7 @@ a {
 .empty h2 {
   margin: 0;
   font-size: var(--t-xl);
+  font-weight: 500;
   letter-spacing: -0.02em;
 }
 .empty p {

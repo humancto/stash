@@ -18,49 +18,43 @@ colors:
   danger: "#d3675a"
   danger-ground: "#2f2125"
   danger-text: "#f0c4bd"
+  danger-ink: "#1a0a07"
 typography:
   headline:
     fontFamily: "Instrument Sans Variable, ui-sans-serif, system-ui, sans-serif"
     fontSize: "1.75rem"
-    fontWeight: 700
+    fontWeight: 500
     lineHeight: 1.15
-    letterSpacing: "-0.025em"
-    fontFeature: '"ss01"'
+    letterSpacing: "-0.032em"
   title:
     fontFamily: "Instrument Sans Variable, ui-sans-serif, system-ui, sans-serif"
     fontSize: "1.4375rem"
-    fontWeight: 700
+    fontWeight: 500
     letterSpacing: "-0.02em"
-    fontFeature: '"ss01"'
   wordmark:
     fontFamily: "Instrument Sans Variable, ui-sans-serif, system-ui, sans-serif"
     fontSize: "1.1875rem"
     fontWeight: 700
     letterSpacing: "-0.02em"
-    fontFeature: '"ss01"'
   body:
     fontFamily: "Instrument Sans Variable, ui-sans-serif, system-ui, sans-serif"
     fontSize: "1rem"
     fontWeight: 400
     lineHeight: 1.5
-    fontFeature: '"ss01"'
   control:
     fontFamily: "Instrument Sans Variable, ui-sans-serif, system-ui, sans-serif"
     fontSize: "0.875rem"
     fontWeight: 500
     lineHeight: 1
-    fontFeature: '"ss01"'
   body-sm:
     fontFamily: "Instrument Sans Variable, ui-sans-serif, system-ui, sans-serif"
     fontSize: "0.875rem"
     fontWeight: 400
     lineHeight: 1.5
-    fontFeature: '"ss01"'
   label:
     fontFamily: "Instrument Sans Variable, ui-sans-serif, system-ui, sans-serif"
     fontSize: "0.8125rem"
     fontWeight: 400
-    fontFeature: '"ss01"'
 rounded:
   sm: "6px"
   md: "10px"
@@ -189,8 +183,8 @@ A brown-black room lit by one amber lamp and by whatever film is on the screen.
 
 ### Secondary
 
-- **Projected Light** (`--screen`, runtime): not a fixed token. A registered `<color>` custom property, defaulting to `rgb(150 96 52)`, set from the average colour of the playing video sampled every 500ms (2s under reduced motion). It feeds the room wash, the rail-edge glow and the player spill, transitioning over 1.6s. The room keeps the last film's light after playback; only real frames change it.
-- **Film-stock swatch** (`--sw`, runtime): a stable per-filename colour confined to a warm band, `hsl(190–229 24% 22–33%)` (slate to teal, leaving gold to the accent), used only on the 16:9 file-row frame until real thumbnails exist.
+- **Projected Light** (`--screen`, runtime): not a fixed token. A registered `<color>` custom property, defaulting to a slate `rgb(52 72 92)` (gold stays the one lamp), set from the average colour of the playing video sampled every 500ms (2s under reduced motion). It feeds the room wash, the rail-edge glow and the player spill, transitioning over 1.6s. The room keeps the last film's light after playback; only real frames change it.
+- **Film-stock swatch** (`--sw`, runtime): a stable per-filename colour confined to a slate-to-teal band, `hsl(190–229 24% 22–33%)`, leaving gold to the accent, used only on the 16:9 file-row frame until real thumbnails exist.
 
 ### Tertiary
 
@@ -217,7 +211,7 @@ A brown-black room lit by one amber lamp and by whatever film is on the screen.
 **Display Font:** none.
 **Body Font:** Instrument Sans Variable (with ui-sans-serif, system-ui, sans-serif), matching Kiri (runkiri.com). **Mono:** JetBrains Mono Variable for small technical labels only: the format column, the `/` key hint and inline code. Page and file titles are weight 500 with tight tracking (−0.03em), as on Kiri.
 
-**Character:** A single humanist grotesk doing every job, from the 28px page titles to 13px meta lines. Hierarchy comes from weight (400/500/550/600/650/700) and the warm-grey text steps, not from a second family.
+**Character:** A single humanist grotesk doing every job, from the 28px page titles to 13px meta lines. Hierarchy comes from weight (400/500/550/600/650/700) and the three text steps, not from a second family (JetBrains Mono appears only on small technical labels).
 
 ### Hierarchy
 

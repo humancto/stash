@@ -39,7 +39,7 @@ function useAmbientLight(video: HTMLMediaElement | null) {
   const room = useRoom();
 
   // The room keeps the light of the last film it showed (or the booth's
-  // tungsten when none has played); only real frames change it.
+  // slate default when none has played); only real frames change it.
   useEffect(() => {
     room.setWatching(true);
     return () => room.setWatching(false);
