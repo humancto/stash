@@ -31,7 +31,7 @@ function items(container: ParentNode, selector: string): HTMLElement[] {
   return [...container.querySelectorAll<HTMLElement>(selector)].filter(visible);
 }
 
-function moveInList(dir: 1 | -1): boolean {
+function moveInList(dir: 1 | -1, leaveList = false): boolean {
   const active = document.activeElement;
   const list = active?.closest("[data-rove]");
   if (!list || !active) return false;
@@ -49,7 +49,8 @@ function moveInList(dir: 1 | -1): boolean {
     : own
       ? all.indexOf(own)
       : -1;
-  const j = i < 0 ? 0 : i + dir;
+  // From a grid's edge row, go straight to the neighbouring list.
+  const j = leaveList ? (dir === 1 ? all.length : -1) : i < 0 ? 0 : i + dir;
   if (j < 0 || j >= all.length) {
     // Past the end of this list: continue into the next list in the same
     // zone (a toolbar above a list, shelves on a page).
@@ -72,6 +73,67 @@ function moveInList(dir: 1 | -1): boolean {
   const next = all[j];
   next?.focus();
   return Boolean(next);
+}
+
+export type Dir = "left" | "right" | "up" | "down";
+
+/** Rectangles of a 2-D grid's items in DOM order → the index to move to,
+ * or null at the edge. Left/Right stay in the row; Up/Down pick the item
+ * in the nearest row above/below whose centre is closest horizontally. */
+export function nextInGrid(
+  rects: readonly { left: number; top: number; width: number; height: number }[],
+  from: number,
+  dir: Dir,
+): number | null {
+  const a = rects[from];
+  if (!a) return null;
+  const cx = (r: (typeof rects)[number]) => r.left + r.width / 2;
+  const cy = (r: (typeof rects)[number]) => r.top + r.height / 2;
+  const sameRow = (r: (typeof rects)[number]) => Math.abs(cy(r) - cy(a)) < a.height / 2;
+  let best: number | null = null;
+  let bestScore = Infinity;
+  rects.forEach((r, i) => {
+    if (i === from) return;
+    let score: number;
+    if (dir === "left" || dir === "right") {
+      if (!sameRow(r)) return;
+      const dx = cx(r) - cx(a);
+      if (dir === "left" ? dx >= 0 : dx <= 0) return;
+      score = Math.abs(dx);
+    } else {
+      const dy = cy(r) - cy(a);
+      if (sameRow(r) || (dir === "up" ? dy >= 0 : dy <= 0)) return;
+      // Nearest row first, then nearest column.
+      score = Math.abs(dy) * 10_000 + Math.abs(cx(r) - cx(a));
+    }
+    if (score < bestScore) {
+      bestScore = score;
+      best = i;
+    }
+  });
+  return best;
+}
+
+/** Arrow keys inside `[data-rove="grid"]`. Returns true when handled; at
+ * an edge it returns false so the caller falls back (zones for Left/Right,
+ * the next list for Up/Down). */
+function moveInGrid(dir: Dir): boolean | "edge" {
+  const active = document.activeElement as HTMLElement | null;
+  const grid = active?.closest<HTMLElement>('[data-rove="grid"]');
+  if (!grid || !active) return false;
+  const all = items(grid, "[data-rove-item]");
+  const from = all.indexOf(active);
+  if (from < 0) return false;
+  const next = nextInGrid(
+    all.map((el) => el.getBoundingClientRect()),
+    from,
+    dir,
+  );
+  if (next === null) return "edge";
+  const el = all[next];
+  el?.focus();
+  el?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  return true;
 }
 
 function moveZone(dir: 1 | -1): boolean {
@@ -101,17 +163,21 @@ export function handleNavKey(e: KeyboardEvent, focusSearch: () => void): void {
       handled = true;
       break;
     case "ArrowDown":
-      handled = moveInList(1);
-      break;
     case "ArrowUp":
-      handled = moveInList(-1);
-      break;
     case "ArrowRight":
-      handled = moveZone(1);
+    case "ArrowLeft": {
+      const dir = ({ ArrowDown: "down", ArrowUp: "up", ArrowRight: "right", ArrowLeft: "left" } as const)[e.key];
+      const g = moveInGrid(dir);
+      if (g === true) {
+        handled = true;
+        break;
+      }
+      // Not in a grid, or at its edge: the usual list / zone moves.
+      if (dir === "down") handled = moveInList(1, g === "edge");
+      else if (dir === "up") handled = moveInList(-1, g === "edge");
+      else handled = moveZone(dir === "right" ? 1 : -1);
       break;
-    case "ArrowLeft":
-      handled = moveZone(-1);
-      break;
+    }
   }
   if (handled) e.preventDefault();
 }

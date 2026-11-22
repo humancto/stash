@@ -8,6 +8,7 @@
 - Local peer discovery is off whenever the kill switch is on.
 
 ### Added
+- **Library:** a poster home page of the films and shows recognised in file names, with a spotlight, Downloading shelf, filters, search, title pages (versions, seasons, episodes) and hide/unhide. `GET /api/library`, `POST/DELETE /api/library/{key}/hide`. Arrow keys move through poster grids by position.
 - Add by pasting anywhere, dropping `.torrent` files or magnet links on the page, or "Open .torrent"; stash can open the browser's `magnet:` links (with a confirm page at `/add`).
 - `POST /api/transfers` accepts a raw `.torrent` body (`application/x-bittorrent`) and bare info hashes; links are checked first, and `.torrent` URLs are downloaded by stash within the kill switch.
 - Delete one file of a transfer from the Files list or the file page (`DELETE /api/transfers/{id}/files/{n}`). The next start rechecks that transfer once.

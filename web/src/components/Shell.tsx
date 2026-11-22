@@ -1,4 +1,4 @@
-import { ArrowDownToLine, Clapperboard, Plus, Search, ShieldCheck } from "lucide-react";
+import { ArrowDownToLine, Clapperboard, Library as LibraryIcon, Plus, Search, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { NavLink, Outlet, useLocation, useNavigate, useSearchParams } from "react-router";
 import { adder, useAdder } from "../lib/adder";
@@ -14,6 +14,10 @@ import { RoomContext, type Room } from "./room";
 function NavLinks({ active }: { active: number }) {
   return (
     <>
+      <NavLink to="/" end className="nav-link" data-rove-item>
+        <LibraryIcon aria-hidden="true" />
+        <span>Library</span>
+      </NavLink>
       <NavLink to="/files" className="nav-link" data-rove-item>
         <Clapperboard aria-hidden="true" />
         <span>Files</span>
@@ -212,28 +216,32 @@ function SearchBox({ inputRef }: { inputRef: React.RefObject<HTMLInputElement | 
   const [params] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const q = location.pathname === "/files" ? (params.get("q") ?? "") : "";
+  // Files searches files; everywhere else searches the Library (home).
+  const target = location.pathname === "/files" ? "/files" : "/";
+  const here = location.pathname === target;
+  const q = here ? (params.get("q") ?? "") : "";
+  const what = target === "/files" ? "files" : "library";
 
   return (
     <div className="search" role="search">
       <Search aria-hidden="true" />
       <label className="visually-hidden" htmlFor="search">
-        Search files
+        Search {what}
       </label>
       <input
         ref={inputRef}
         id="search"
         className="input"
         type="search"
-        placeholder="Search files"
+        placeholder={`Search ${what}`}
         value={q}
         autoComplete="off"
         onChange={(e) => {
-          const next = new URLSearchParams(location.pathname === "/files" ? params : undefined);
+          const next = new URLSearchParams(here ? params : undefined);
           if (e.target.value) next.set("q", e.target.value);
           else next.delete("q");
           const qs = next.toString();
-          navigate(`/files${qs ? `?${qs}` : ""}`, { replace: location.pathname === "/files" });
+          void navigate(`${target}${qs ? `?${qs}` : ""}`, { replace: here });
         }}
         onKeyDown={(e) => {
           if (e.key === "Escape") {
@@ -290,7 +298,7 @@ export function Shell() {
     <RoomContext.Provider value={room}>
       <div className="room" ref={roomRef} data-watching={watching}>
         <nav className="rail" aria-label="Main" data-zone data-rove>
-          <NavLink to="/files" className="wordmark" tabIndex={-1}>
+          <NavLink to="/" className="wordmark" tabIndex={-1}>
             <Logo />
             <span>stash</span>
           </NavLink>

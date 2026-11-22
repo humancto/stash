@@ -3,6 +3,8 @@ import { RouterProvider } from "react-router/dom";
 import { Shell } from "./components/Shell";
 import { AddConfirm } from "./views/AddConfirm";
 import { Files } from "./views/Files";
+import { Library } from "./views/Library";
+import { Title } from "./views/Title";
 import { Privacy } from "./views/Privacy";
 import { Transfers } from "./views/Transfers";
 import { Watch } from "./views/Watch";
@@ -11,13 +13,15 @@ export const routes = [
   {
     element: <Shell />,
     children: [
-      { index: true, element: <Navigate to="/files" replace /> },
+      { index: true, element: <Library /> },
+      { path: "library", element: <Navigate to="/" replace /> },
+      { path: "title/:key", element: <Title /> },
       { path: "files", element: <Files /> },
       { path: "transfers", element: <Transfers /> },
       { path: "privacy", element: <Privacy /> },
       { path: "watch/:tid/:fid", element: <Watch /> },
       { path: "add", element: <AddConfirm /> },
-      { path: "*", element: <Navigate to="/files" replace /> },
+      { path: "*", element: <Navigate to="/" replace /> },
     ],
   },
 ];

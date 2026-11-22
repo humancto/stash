@@ -327,6 +327,18 @@ The player: 16:9, black, 14px radius, wearing the screen spill. When there is no
 
 A 56px 16:9 swatch: the film-stock colour with a soft highlight at the top left, darkening to 40% black, a white 16px kind icon at 82% opacity, and the film-frame shadow.
 
+### Library (posters)
+
+The home page (`/`) and the title page (`/title/:key`). The owner asked for a poster Library (2026-11-21), so this is the one place the booth becomes a wall of pictures; the pictures are still not artwork.
+
+- **Typographic poster:** a 2:3 card whose picture is the title itself (weight 600, −0.025em, balanced, clamped to 5 lines, sized by length in container units), set on the title's own hue (**Title hue**, `--tc`: a stable per-title colour from the key, any hue outside gold's 25–85° band, 26–40% saturation, 25–35% lightness). A soft light falls from the top left, the hue darkens to 42% black at the foot, and two faint rings (the reel) sit in the top-right corner. Foot: year (or "Series") and one technical detail in mono (resolution or episode count) under a 16% white hairline.
+- **States:** downloading posters show an 28px amber reel and a "Playable now" pill (amber text on 72% ground) in the top-left; paused and checking posters desaturate; a transfer still fetching its file list is a striped panel card ("Fetching details…").
+- **Spotlight:** the newest playable title as a wide band lit in its hue, the title at up to 3.75rem/600, meta and mono quality badges, then Play (the page's amber button) and Details. It also sets `--screen` to the title hue, so the room takes the title's light.
+- **Shelves and grid:** Downloading and (when it is a subset) Recently added are one-row horizontal shelves; All titles is a grid of 6 columns (5 ≤1400px, 4 ≤1023px, 3 on phones, 7 on the TV). Type and state filters are two segmented groups; sort is a select.
+- **Title page:** a hero band in the title hue with the typographic poster, the title at up to 3rem/600, meta, quality badges, Play and "Hide from Library" (quiet). Shows get a season segmented group and ruled episode rows (S01E02 · episode name · size · status); films list their versions.
+- **Motion and focus:** posters lift 2px and scale 1.02 on hover and focus (none under reduced motion); focus is the amber outline at 3px offset. Arrow keys move through grids by position.
+- **Badge:** mono 0.6875rem, 0.03em tracking, 1px 24% print border, 6px radius. Data, not decoration.
+
 ## Do's and Don'ts
 
 ### Do:
@@ -344,6 +356,6 @@ A 56px 16:9 swatch: the film-stock colour with a soft highlight at the top left,
 - **Don't** add a second family or a display face; hierarchy is weight and text step in the one sans.
 - **Don't** introduce a second UI accent. The only other hues are sage for ready, coral for danger, and the film's own light.
 - **Don't** put white text on amber; use burnt ink.
-- **Don't** invent artwork, posters or dates; a generated warm swatch is the only stand-in for a frame.
+- **Don't** invent artwork or dates. The Library's posters are typographic (the title on its generated hue), never a picture standing in for the film; real images arrive only from a metadata source the owner turns on.
 - **Don't** lift panels, rows or buttons on drop shadows; only the screen glows (The Light Not Lift Rule).
 - **Don't** mark the current nav item in amber; it takes the raised fill.

@@ -1605,7 +1605,7 @@ a {
     inset: auto 0 0;
     z-index: 5;
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     padding: 6px 12px calc(6px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--hair);
     background: color-mix(in srgb, var(--ground) 92%, transparent);
@@ -1725,4 +1725,399 @@ a {
   display: flex;
   gap: 8px;
   margin-top: 20px;
+}
+
+/* ---------------------------------------------------------------------
+   Library: typographic posters on each title's own hue. No artwork
+   exists yet, so the title is the picture; the reel rings echo the mark.
+   --------------------------------------------------------------------- */
+.library {
+  --cols: 6;
+  --gap: 16px;
+}
+.shelf {
+  margin: 0 0 36px;
+}
+.shelf-title {
+  margin: 0 0 14px;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.shelf-empty,
+.shelf-more {
+  color: var(--text-3);
+  font-size: var(--t-sm);
+}
+.shelf-more {
+  margin: 16px 0 0;
+}
+.poster-grid,
+.shelf-row {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.poster-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+  gap: 22px var(--gap);
+}
+.poster-grid > li {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 280px;
+}
+.shelf-row {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: calc((100% - (var(--cols) - 1) * var(--gap)) / var(--cols));
+  gap: var(--gap);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  /* Room for the focus ring and its scale. */
+  padding: 6px 4px 14px;
+  margin: -6px -4px 0;
+  scrollbar-width: thin;
+}
+.shelf-row > li {
+  scroll-snap-align: start;
+}
+
+.poster {
+  position: relative;
+  display: block;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--r-md);
+  color: var(--text);
+  text-decoration: none;
+  container-type: inline-size;
+  transition: transform 220ms var(--ease-out);
+}
+.poster-art {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 9cqi 9cqi 8cqi;
+  overflow: hidden;
+  border-radius: inherit;
+  background:
+    /* the reel: two faint rings in the upper corner */
+    radial-gradient(circle at 88% 10%, transparent 0 19cqi, rgb(255 255 255 / 0.07) 19cqi 20.5cqi, transparent 20.5cqi 26cqi, rgb(255 255 255 / 0.045) 26cqi 27cqi, transparent 27cqi),
+    radial-gradient(140% 75% at 10% 0%, color-mix(in srgb, var(--tc) 78%, #fff 22%) 0%, transparent 62%),
+    linear-gradient(172deg, var(--tc) 0%, color-mix(in srgb, var(--tc) 42%, #000) 100%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tc) 55%, rgb(255 255 255 / 0.12));
+  transition: filter 200ms var(--ease-out);
+}
+.poster-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+  line-height: 1.04;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+  text-shadow: 0 1px 12px rgb(0 0 0 / 0.25);
+}
+.poster-title--xl {
+  font-size: 15cqi;
+}
+.poster-title--l {
+  font-size: 12.5cqi;
+}
+.poster-title--m {
+  font-size: 10.5cqi;
+}
+.poster-title--s {
+  font-size: 8.8cqi;
+}
+.poster-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 6cqi;
+  padding-top: 5cqi;
+  border-top: 1px solid rgb(255 255 255 / 0.16);
+  color: rgb(246 242 234 / 0.78);
+  font-size: max(0.6875rem, 7cqi);
+}
+.poster-detail {
+  font-family: var(--mono);
+  font-size: max(0.625rem, 6cqi);
+  letter-spacing: 0.02em;
+}
+.poster-progress {
+  position: absolute;
+  top: 7cqi;
+  left: 7cqi;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--amber);
+}
+.poster-progress .reel {
+  border-radius: 50%;
+  background: rgb(15 20 25 / 0.72);
+}
+.poster-pill {
+  padding: 4px 8px;
+  border-radius: var(--r-pill, 999px);
+  background: rgb(15 20 25 / 0.72);
+  color: var(--amber);
+  font-size: 0.6875rem;
+  font-weight: 650;
+}
+.poster--paused .poster-art,
+.poster--checking .poster-art {
+  filter: saturate(0.55) brightness(0.82);
+}
+.poster--error .poster-art {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 60%, transparent);
+}
+.poster--pending .poster-art {
+  background: repeating-linear-gradient(135deg, var(--panel) 0 12px, var(--raised) 12px 24px);
+  box-shadow: inset 0 0 0 1px var(--hair-strong);
+  color: var(--text-2);
+}
+.poster--pending .poster-foot {
+  border-top-color: var(--hair);
+  color: var(--text-3);
+}
+.poster:hover .poster-art {
+  filter: brightness(1.12);
+}
+.poster:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 3px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .poster:focus-visible,
+  .poster:hover {
+    transform: translateY(-2px) scale(1.02);
+  }
+}
+
+/* The spotlight: the newest title that can play, lit in its own hue. */
+.spotlight {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  min-height: clamp(240px, 36vh, 400px);
+  margin: 0 0 36px;
+  padding: clamp(22px, 4vw, 52px);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--tc) 45%, var(--hair));
+  border-radius: var(--r-lg);
+  background:
+    radial-gradient(circle at 86% 22%, transparent 0 96px, rgb(255 255 255 / 0.06) 96px 100px, transparent 100px 132px, rgb(255 255 255 / 0.04) 132px 135px, transparent 135px),
+    radial-gradient(85% 130% at 92% 0%, color-mix(in srgb, var(--tc) 88%, #fff 12%) 0%, transparent 58%),
+    linear-gradient(100deg, color-mix(in srgb, var(--tc) 28%, var(--ground)) 10%, color-mix(in srgb, var(--tc) 78%, var(--ground)) 100%);
+}
+.spotlight.skeleton {
+  background: var(--raised);
+  border-color: var(--hair);
+  animation: breathe 1.6s ease-in-out infinite;
+}
+.spotlight-title {
+  max-width: 18ch;
+  margin: 0;
+  font-size: clamp(2rem, 4.6vw, 3.75rem);
+  font-weight: 600;
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+.spotlight-meta,
+.title-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 12px 0 0;
+  color: var(--text-2);
+  font-size: var(--t-sm);
+}
+.spotlight-actions,
+.title-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+.badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.badge {
+  padding: 3px 7px;
+  border: 1px solid rgb(246 242 234 / 0.24);
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+}
+
+.library-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--hair);
+}
+.hidden-list {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--hair);
+}
+.hidden-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--hair);
+}
+
+/* Title page */
+.title-hero {
+  display: grid;
+  grid-template-columns: clamp(130px, 16vw, 220px) minmax(0, 1fr);
+  align-items: end;
+  gap: clamp(20px, 3vw, 40px);
+  margin: 4px 0 28px;
+  padding: clamp(20px, 3vw, 36px);
+  border: 1px solid color-mix(in srgb, var(--tc) 40%, var(--hair));
+  border-radius: var(--r-lg);
+  background:
+    radial-gradient(80% 140% at 100% 0%, color-mix(in srgb, var(--tc) 70%, transparent) 0%, transparent 60%),
+    linear-gradient(100deg, color-mix(in srgb, var(--tc) 18%, var(--ground)), color-mix(in srgb, var(--tc) 45%, var(--ground)));
+}
+.title-hero.skeleton {
+  min-height: 300px;
+  background: var(--raised);
+  animation: breathe 1.6s ease-in-out infinite;
+}
+.title-card {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--r-md);
+  container-type: inline-size;
+}
+.title-name {
+  margin: 0;
+  font-size: clamp(1.9rem, 3.6vw, 3rem);
+  font-weight: 600;
+  line-height: 1.04;
+  letter-spacing: -0.032em;
+  text-wrap: balance;
+}
+.title-hero .badges {
+  margin-top: 12px;
+}
+.title-wait {
+  align-self: center;
+  color: var(--text-3);
+  font-size: var(--t-sm);
+}
+.season-tabs {
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.ep-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--hair);
+}
+.ep-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 92px 168px;
+  align-items: center;
+  gap: 16px;
+  min-height: 56px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--hair);
+}
+.ep-row:hover {
+  background: color-mix(in srgb, var(--raised) 80%, transparent);
+}
+.ep-main {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  min-width: 0;
+  border-radius: var(--r-sm);
+  color: var(--text);
+  text-decoration: none;
+}
+.ep-label {
+  min-width: 4.5em;
+  font-weight: 600;
+}
+.ep-name {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: var(--t-xs, 0.8125rem);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ep-size {
+  color: var(--text-2);
+  font-size: var(--t-sm);
+  text-align: right;
+}
+
+@media (max-width: 1400px) {
+  .library {
+    --cols: 5;
+  }
+}
+@media (max-width: 1023px) {
+  .library {
+    --cols: 4;
+  }
+}
+@media (max-width: 640px) {
+  .library {
+    --cols: 3;
+    --gap: 10px;
+  }
+  .shelf-row {
+    grid-auto-columns: 38%;
+  }
+  .title-hero {
+    grid-template-columns: 1fr;
+  }
+  .title-card {
+    width: 128px;
+  }
+  .ep-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .ep-row .badges,
+  .ep-size {
+    display: none;
+  }
+}
+@media (min-width: 1800px) {
+  .library {
+    --cols: 7;
+  }
+}
+.poster-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
