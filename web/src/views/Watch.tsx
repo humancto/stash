@@ -88,8 +88,8 @@ function useAmbientLight(video: HTMLMediaElement | null) {
 
 /** Where Back goes: the page that opened this file (a Library title, the
  * Library), else Files. Only in-app paths are accepted. */
-export function backTarget(state: unknown): { path: string; label: string } {
-  const fallback = { path: "/files", label: "Files" };
+export function backTarget(state: unknown): { path: string; label: string; fallback?: true } {
+  const fallback = { path: "/files", label: "Files", fallback: true as const };
   if (typeof state !== "object" || state === null || !("from" in state)) return fallback;
   const f = state.from;
   if (typeof f !== "object" || f === null) return fallback;
@@ -249,7 +249,9 @@ export function Watch() {
           }}
         >
           <ArrowLeft aria-hidden="true" />
-          {from.label}
+          {/* Opened from somewhere without a label (Transfers): Back goes
+              there, so don't promise Files. */}
+          {from.fallback && location.key !== "default" ? "Back" : from.label}
         </Link>
         <div className="screen">
           {playable && !failed ? (

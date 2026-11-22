@@ -8,6 +8,7 @@ import { handleNavKey, nextInGrid } from "../lib/keys";
 import {
   createLibraryStore,
   indexTransfers,
+  library as libraryStore,
   episodeLabel,
   episodeName,
   librarySignature,
@@ -518,5 +519,30 @@ describe("remote and history", () => {
     expect(await screen.findByRole("heading", { name: "1 title" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /^Blade Runner 2049, 2017, film, downloading 40%/ })).toBeInTheDocument();
   });
-});
 
+  it("keeps focus on a season button after choosing it", async () => {
+    server();
+    open("/title/show-severance");
+    await screen.findByRole("heading", { name: "Severance", level: 1 });
+    const s2 = screen.getByRole("button", { name: "Season 2" });
+    await userEvent.click(s2);
+    await screen.findByRole("heading", { name: "Season 2" });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Season 2" }));
+  });
+
+  it("doesn't pull focus back to the poster when the Library refetches", async () => {
+    server();
+    open("/");
+    const poster = (await screen.findAllByRole("link", { name: /^Severance, show/ }))[0]!;
+    await userEvent.click(poster);
+    await screen.findByRole("heading", { name: "Severance", level: 1 });
+    await userEvent.click(document.querySelector<HTMLElement>(".title-page .back")!);
+    await waitFor(() => expect(document.activeElement?.getAttribute("data-key")).toBe("show-severance"));
+    const play = screen.getByRole("link", { name: /^Play/ });
+    play.focus();
+    await act(async () => {
+      await libraryStore.refresh();
+    });
+    expect(document.activeElement).toBe(play);
+  });
+});

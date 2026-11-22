@@ -122,8 +122,11 @@ export function Title() {
   // Arriving on a fresh page leaves focus on <body> (the poster unmounted):
   // put it on Play (or Hide). Back from the player focuses the played row.
   const ready = Boolean(t);
+  // Once per arrival (PUSH or POP), never on our own REPLACEs (season).
+  const arrived = useRef<string | null>(null);
   useLayoutEffect(() => {
-    if (!ready) return;
+    if (!ready || navType === "REPLACE" || arrived.current === location.key) return;
+    arrived.current = location.key;
     if (navType === "POP" && lastPlayed) {
       const row = document.querySelector<HTMLElement>(
         `.ep-list [data-key="${CSS.escape(lastPlayed)}"]`,
@@ -134,12 +137,12 @@ export function Title() {
       }
     }
     actionsRef.current?.querySelector<HTMLElement>("[data-rove-item]")?.focus();
-  }, [ready, key, navType]);
+  }, [ready, key, navType, location.key]);
 
   // Its last file was deleted from the player: back to the Library.
   useEffect(() => {
     if (lib && !t && !error && inApp && navType === "POP")
-      void navigate("/", { replace: true });
+      void navigate("/", { replace: true, state: { focusFirst: true } });
   }, [lib, t, error, inApp, navType, navigate]);
 
   useEffect(() => {

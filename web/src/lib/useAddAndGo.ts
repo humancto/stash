@@ -16,11 +16,14 @@ export function useAddAndGo() {
       if (!ok) return false;
       if (stay)
         adder.setStatus(
-          onWatch ? "Added. It's on Transfers." : "Added. It's on the Downloading shelf.",
+          // Filters and search hide the shelves.
+          onWatch || location.search
+            ? "Added. It's on Transfers."
+            : "Added. It's on the Downloading shelf.",
         );
       else void navigate("/transfers", { state: { added: true } });
       return true;
     },
-    [navigate, onWatch, stay],
+    [navigate, onWatch, stay, location.search],
   );
 }

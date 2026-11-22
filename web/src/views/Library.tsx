@@ -1,6 +1,6 @@
 import { Play } from "lucide-react";
-import { memo, useEffect, useMemo, useState } from "react";
-import { Link, useNavigationType, useSearchParams } from "react-router";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation, useNavigationType, useSearchParams } from "react-router";
 import { Poster } from "../components/Poster";
 import { useRoom } from "../components/room";
 import { api } from "../lib/api";
@@ -266,17 +266,28 @@ export function Library() {
   const recent =
     recentAll.length < visible.length ? recentAll.slice(0, 12) : [];
 
-  // Back from a title page: focus the poster that was opened.
+  // Back from a title page: focus the poster that was opened. Once per
+  // arrival, when the first library is there, never on later refetches.
+  // After a title vanished (its last file deleted), the first poster.
+  const location = useLocation();
+  const restored = useRef<string | null>(null);
+  const focusFirst =
+    typeof location.state === "object" &&
+    location.state !== null &&
+    "focusFirst" in location.state &&
+    location.state.focusFirst === true;
   useEffect(() => {
-    if (navType !== "POP" || !lastPoster || !lib) return;
-    const el = document.querySelector<HTMLElement>(
-      `.library [data-key="${CSS.escape(lastPoster)}"]`,
-    );
+    if (!lib || restored.current === location.key) return;
+    restored.current = location.key;
+    let el: HTMLElement | null = null;
+    if (navType === "POP" && lastPoster)
+      el = document.querySelector<HTMLElement>(`.library [data-key="${CSS.escape(lastPoster)}"]`);
+    else if (focusFirst) el = document.querySelector<HTMLElement>(".library .poster");
     if (el) {
       el.focus();
       el.scrollIntoView?.({ block: "nearest", inline: "nearest" });
     }
-  }, [navType, lib]);
+  }, [navType, lib, location.key, focusFirst]);
 
   const onPick = (e: React.MouseEvent) => {
     if (!(e.target instanceof Element)) return;
