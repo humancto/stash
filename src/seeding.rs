@@ -652,7 +652,7 @@ impl Seeding {
         for w in work {
             let Ok(id20) = w.hash.parse() else { continue };
             let id = TorrentIdOrHash::Hash(id20);
-            for fid in w.pending {
+            for &fid in &w.pending {
                 let Ok(_writing) = privacy.write_guard().await else {
                     return;
                 };
@@ -708,7 +708,9 @@ impl Seeding {
                 })
                 .await;
             }
-            if w.repair && privacy.can_add() {
+            // Not while a pending delete still has to finish: the fetched
+            // piece would land in a path that is about to be truncated.
+            if w.repair && w.pending.is_empty() && privacy.can_add() {
                 let Ok(_writing) = privacy.write_guard().await else {
                     return;
                 };
@@ -773,6 +775,13 @@ impl Seeding {
                     e.finished_at = Some(now);
                     // Must survive a crash: it's what closes the seeding
                     // window after the next start.
+                    urgent = true;
+                }
+                if e.repairing && st.finished && matches!(st.state, TorrentStatsState::Live) {
+                    // Repaired. Under Forever or Seed nothing pauses it, so
+                    // clear the flag here; it must not skip a later startup
+                    // pause.
+                    e.repairing = false;
                     urgent = true;
                 }
                 dirty |= *e != before;
