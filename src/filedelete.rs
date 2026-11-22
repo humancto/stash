@@ -7,10 +7,13 @@
 //! that is safe (see [`placeholder_removable`]).
 
 use std::{
-    fs::OpenOptions,
+    ffi::CString,
     io,
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
-    path::{Component, Path, PathBuf},
+    os::{
+        fd::{AsRawFd, FromRawFd, OwnedFd},
+        unix::{ffi::OsStrExt, fs::MetadataExt},
+    },
+    path::{Component, Path},
 };
 
 use librqbit::file_info::FileInfo;
@@ -38,31 +41,67 @@ impl std::fmt::Display for Refused {
     }
 }
 
-/// `root/rel`, with the parent canonicalized and checked to be inside the
-/// canonical root. `Ok(None)`: the root or the parent no longer exists, so
-/// the file is already gone.
-pub fn resolve(root: &Path, rel: &Path) -> Result<Option<PathBuf>, Refused> {
+/// Opens the folder holding `root/rel` by walking from the canonical root
+/// one component at a time with `openat(O_NOFOLLOW)`, so nothing below the
+/// root is resolved by path name again (no symlink swap between check and
+/// use). `Ok(None)`: something on the way is gone, so the file is too.
+fn open_parent(root: &Path, rel: &Path) -> Result<Option<(OwnedFd, CString)>, Refused> {
     if rel.as_os_str().is_empty() || !rel.components().all(|c| matches!(c, Component::Normal(_))) {
         return Err(Refused::Outside);
     }
     let name = rel.file_name().ok_or(Refused::Outside)?;
-    let canon = |p: &Path| match p.canonicalize() {
-        Ok(c) => Ok(Some(c)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(Refused::Io(e)),
+    let root = match root.canonicalize() {
+        Ok(r) => r,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(Refused::Io(e)),
     };
-    let Some(root) = canon(root)? else {
+    let cstr = |s: &std::ffi::OsStr| CString::new(s.as_bytes()).map_err(|_| Refused::Outside);
+    let open_dir = |at: Option<&OwnedFd>, part: &CString| -> Result<Option<OwnedFd>, Refused> {
+        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC;
+        // SAFETY: `part` is a valid C string and `at` a live fd.
+        let fd = unsafe {
+            match at {
+                Some(d) => libc::openat(d.as_raw_fd(), part.as_ptr(), flags | libc::O_NOFOLLOW),
+                None => libc::open(part.as_ptr(), flags),
+            }
+        };
+        if fd >= 0 {
+            // SAFETY: a fresh fd we own.
+            return Ok(Some(unsafe { OwnedFd::from_raw_fd(fd) }));
+        }
+        let e = io::Error::last_os_error();
+        match e.raw_os_error() {
+            Some(libc::ENOENT) => Ok(None),
+            // A symlink (or a file) where a folder should be.
+            Some(libc::ELOOP | libc::ENOTDIR) => Err(Refused::Outside),
+            _ => Err(Refused::Io(e)),
+        }
+    };
+    let Some(mut dir) = open_dir(None, &cstr(root.as_os_str())?)? else {
         return Ok(None);
     };
-    let parent = root.join(rel);
-    let parent = parent.parent().ok_or(Refused::Outside)?;
-    let Some(parent) = canon(parent)? else {
-        return Ok(None);
-    };
-    if !parent.starts_with(&root) {
-        return Err(Refused::Outside);
+    if let Some(parent) = rel.parent() {
+        for part in parent.components() {
+            let Some(next) = open_dir(Some(&dir), &cstr(part.as_os_str())?)? else {
+                return Ok(None);
+            };
+            dir = next;
+        }
     }
-    Ok(Some(parent.join(name)))
+    Ok(Some((dir, cstr(name)?)))
+}
+
+fn unlink_at(dir: &OwnedFd, name: &CString) -> Result<(), Refused> {
+    // SAFETY: valid fd and C string.
+    if unsafe { libc::unlinkat(dir.as_raw_fd(), name.as_ptr(), 0) } == 0 {
+        return Ok(());
+    }
+    let e = io::Error::last_os_error();
+    if e.kind() == io::ErrorKind::NotFound {
+        Ok(())
+    } else {
+        Err(Refused::Io(e))
+    }
 }
 
 /// Removes the file, returning the bytes freed. Truncates first (through
@@ -70,21 +109,28 @@ pub fn resolve(root: &Path, rel: &Path) -> Result<Option<PathBuf>, Refused> {
 /// file open), unless other hard links share the data: then it only
 /// unlinks this name and frees nothing. Missing = already gone.
 pub fn remove(root: &Path, rel: &Path, torrent_len: u64) -> Result<u64, Refused> {
-    let Some(path) = resolve(root, rel)? else {
+    let Some((dir, name)) = open_parent(root, rel)? else {
         return Ok(0);
     };
-    let file = match OpenOptions::new()
-        .write(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&path)
-    {
-        Ok(f) => f,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
-        // O_NOFOLLOW on a symlink: ELOOP.
-        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => return Err(Refused::NotAFile),
-        Err(e) if e.raw_os_error() == Some(libc::EISDIR) => return Err(Refused::NotAFile),
-        Err(e) => return Err(Refused::Io(e)),
+    // SAFETY: valid fd and C string.
+    let fd = unsafe {
+        libc::openat(
+            dir.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
     };
+    if fd < 0 {
+        let e = io::Error::last_os_error();
+        return match e.raw_os_error() {
+            Some(libc::ENOENT) => Ok(0),
+            // O_NOFOLLOW on a symlink: ELOOP.
+            Some(libc::ELOOP | libc::EISDIR) => Err(Refused::NotAFile),
+            _ => Err(Refused::Io(e)),
+        };
+    }
+    // SAFETY: a fresh fd we own.
+    let file = std::fs::File::from(unsafe { OwnedFd::from_raw_fd(fd) });
     let meta = file.metadata().map_err(Refused::Io)?;
     if !meta.is_file() {
         return Err(Refused::NotAFile);
@@ -100,11 +146,8 @@ pub fn remove(root: &Path, rel: &Path, torrent_len: u64) -> Result<u64, Refused>
         0
     };
     drop(file);
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(freed),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(freed),
-        Err(e) => Err(Refused::Io(e)),
-    }
+    unlink_at(&dir, &name)?;
+    Ok(freed)
 }
 
 /// Does file `fid` share a piece with another included, non-padding file?
@@ -126,22 +169,32 @@ pub fn shares_selected_piece(files: &[FileInfo], fid: usize, included: &[usize])
 /// A 0-byte placeholder librqbit recreated for a deleted file: removed when
 /// it is a plain, unlinked-elsewhere, empty file. Returns whether it was.
 pub fn remove_placeholder(root: &Path, rel: &Path) -> Result<bool, Refused> {
-    let Some(path) = resolve(root, rel)? else {
+    let Some((dir, name)) = open_parent(root, rel)? else {
         return Ok(false);
     };
-    let meta = match std::fs::symlink_metadata(&path) {
-        Ok(m) => m,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => return Err(Refused::Io(e)),
+    // SAFETY: zeroed stat is a valid out-parameter; valid fd and C string.
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    let rc = unsafe {
+        libc::fstatat(
+            dir.as_raw_fd(),
+            name.as_ptr(),
+            &mut st,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
     };
-    if !meta.is_file() || meta.len() != 0 || meta.nlink() != 1 {
+    if rc != 0 {
+        let e = io::Error::last_os_error();
+        return if e.kind() == io::ErrorKind::NotFound {
+            Ok(false)
+        } else {
+            Err(Refused::Io(e))
+        };
+    }
+    if (st.st_mode & libc::S_IFMT) != libc::S_IFREG || st.st_size != 0 || st.st_nlink != 1 {
         return Ok(false);
     }
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(true),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(Refused::Io(e)),
-    }
+    unlink_at(&dir, &name)?;
+    Ok(true)
 }
 
 /// Files that count as "visible" for the last-file rule (the UI's `sole`).
@@ -156,7 +209,7 @@ mod tests {
 
     fn fi(start: u32, end: u32, padding: bool) -> FileInfo {
         FileInfo {
-            relative_filename: PathBuf::from("x"),
+            relative_filename: std::path::PathBuf::from("x"),
             offset_in_torrent: 0,
             piece_range: start..end,
             attrs: FileDetailsAttrs {
@@ -198,22 +251,24 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         for bad in ["../x", "/etc/passwd", "a/../../x", ""] {
             assert!(
-                matches!(resolve(d.path(), Path::new(bad)), Err(Refused::Outside)),
+                matches!(remove(d.path(), Path::new(bad), 9), Err(Refused::Outside)),
                 "{bad}"
             );
         }
         // a symlinked directory pointing outside the root
         let outside = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink(outside.path(), d.path().join("link")).unwrap();
+        std::fs::write(outside.path().join("f"), b"keep").unwrap();
         assert!(matches!(
-            resolve(d.path(), Path::new("link/f")),
+            remove(d.path(), Path::new("link/f"), 9),
             Err(Refused::Outside)
         ));
-        // missing parent → already gone
         assert!(matches!(
-            resolve(d.path(), Path::new("no/such/f")),
-            Ok(None)
+            remove_placeholder(d.path(), Path::new("link/f")),
+            Err(Refused::Outside)
         ));
+        assert_eq!(std::fs::read(outside.path().join("f")).unwrap(), b"keep");
+        // missing parent → already gone
         assert!(matches!(remove(d.path(), Path::new("no/such/f"), 9), Ok(0)));
         assert!(matches!(remove(d.path(), Path::new("missing"), 9), Ok(0)));
     }
