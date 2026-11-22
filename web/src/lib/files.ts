@@ -131,10 +131,11 @@ export function swatch(name: string): string {
     h ^= name.charCodeAt(i);
     h = Math.imul(h, 16777619);
   }
-  // Warm band only (umber to amber to ember), varied in lightness, so tiles
-  // read as film stock in a warm room; the icon carries the file type.
+  // Harbour-night band (slate blue to teal), varied in lightness, so tiles
+  // sit in Kiri's navy palette and leave gold to the accent; the icon
+  // carries the file type.
   const n = h >>> 0;
-  const hue = 12 + (n % 38);
-  const light = 26 + ((n >>> 8) % 14);
-  return `hsl(${hue} 42% ${light}%)`;
+  const hue = 190 + (n % 40);
+  const light = 22 + ((n >>> 8) % 12);
+  return `hsl(${hue} 24% ${light}%)`;
 }

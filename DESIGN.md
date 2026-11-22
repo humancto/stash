@@ -1,63 +1,63 @@
 ---
 name: stash
-description: A self-hosted torrent box you watch from. The interface is the dark warm room; the film is the light.
+description: A self-hosted torrent box you watch from, in Kiri's colours and type. The interface is the dark harbour-night room; the film is the light.
 colors:
-  ground: "#14110f"
-  panel: "#1b1714"
-  raised: "#241f1a"
-  hair: "#3a312a"
-  hair-strong: "#4d4238"
-  hair-hover: "#5e5045"
-  text: "#f3ece0"
-  text-2: "#bcb09f"
-  text-3: "#968a7a"
-  amber: "#f0a33a"
-  amber-hover: "#f6b65c"
-  amber-ink: "#1f1406"
-  ready: "#a9c79f"
-  danger: "#ec7a6c"
-  danger-ground: "#3a1d18"
-  danger-text: "#ffd9d3"
+  ground: "#0f1419"
+  panel: "#131920"
+  raised: "#171e26"
+  raised-2: "#1d252e"
+  hair: "#26303a"
+  hair-strong: "#34404c"
+  text: "#f6f2ea"
+  text-2: "#c9cdd2"
+  text-3: "#9aa3ae"
+  amber: "#e0b420"
+  amber-hover: "#e4be41"
+  amber-ink: "#1a1400"
+  ready: "#5cc99a"
+  danger: "#d3675a"
+  danger-ground: "#2f2125"
+  danger-text: "#f0c4bd"
 typography:
   headline:
-    fontFamily: "Hanken Grotesk Variable, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Instrument Sans Variable, ui-sans-serif, system-ui, sans-serif"
     fontSize: "1.75rem"
     fontWeight: 700
     lineHeight: 1.15
     letterSpacing: "-0.025em"
     fontFeature: '"ss01"'
   title:
-    fontFamily: "Hanken Grotesk Variable, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Instrument Sans Variable, ui-sans-serif, system-ui, sans-serif"
     fontSize: "1.4375rem"
     fontWeight: 700
     letterSpacing: "-0.02em"
     fontFeature: '"ss01"'
   wordmark:
-    fontFamily: "Hanken Grotesk Variable, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Instrument Sans Variable, ui-sans-serif, system-ui, sans-serif"
     fontSize: "1.1875rem"
     fontWeight: 700
     letterSpacing: "-0.02em"
     fontFeature: '"ss01"'
   body:
-    fontFamily: "Hanken Grotesk Variable, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Instrument Sans Variable, ui-sans-serif, system-ui, sans-serif"
     fontSize: "1rem"
     fontWeight: 400
     lineHeight: 1.5
     fontFeature: '"ss01"'
   control:
-    fontFamily: "Hanken Grotesk Variable, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Instrument Sans Variable, ui-sans-serif, system-ui, sans-serif"
     fontSize: "0.875rem"
     fontWeight: 500
     lineHeight: 1
     fontFeature: '"ss01"'
   body-sm:
-    fontFamily: "Hanken Grotesk Variable, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Instrument Sans Variable, ui-sans-serif, system-ui, sans-serif"
     fontSize: "0.875rem"
     fontWeight: 400
     lineHeight: 1.5
     fontFeature: '"ss01"'
   label:
-    fontFamily: "Hanken Grotesk Variable, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Instrument Sans Variable, ui-sans-serif, system-ui, sans-serif"
     fontSize: "0.8125rem"
     fontWeight: 400
     fontFeature: '"ss01"'
@@ -162,6 +162,8 @@ components:
 
 **Creative North Star: "The Projection Booth"**
 
+**Palette (2026-11):** colours and type follow Kiri's dark theme (runkiri.com): navy ink ground `#0f1419`, warm paper text `#f6f2ea`, ember gold `#e0b420` as the one lamp, moss `#5cc99a` for ready, `#d3675a` for danger. Where the text below says brown, warm or tungsten, read navy, slate and ember gold; the rules (one lamp, the film is the light) are unchanged.
+
 stash is a projection booth at night. The interface is the dark, warm room: near-black walls with a brown cast, hairline seams, off-white print-stock text. The film is the only real light. When something plays, its sampled colour washes the top of the room and the rail edge, and the player throws a soft spill of that colour around itself. A single tungsten amber lamp marks what to press, where focus is, and what is moving.
 
 The system is dense and operational, not a poster wall. Files are a ruled list with a small warm swatch per row, transfers are rows with a reel that fills as they download, and the watch page gives the player the full width with an actions rail beside it. One workhorse sans with tabular figures carries everything. There is no display face, no artwork and no invented metadata; colour that stands in for a frame is a generated swatch, never a picture.
@@ -174,7 +176,7 @@ The room scales with the screen: a 224px rail on desktop collapses to an icon ra
 - One amber lamp: primary action, focus, progress, the active count and the stash mark.
 - Light comes from the film: a live `--screen` colour drives the room wash and the player spill.
 - Reel rings, not bars, for download progress.
-- One sans (Hanken Grotesk Variable, ss01) with tabular figures for every number.
+- One sans (Instrument Sans Variable) with tabular figures for every number; JetBrains Mono only for small technical labels.
 - Status is always a word; colour and the reel only reinforce it.
 
 ## Colors
@@ -188,7 +190,7 @@ A brown-black room lit by one amber lamp and by whatever film is on the screen.
 ### Secondary
 
 - **Projected Light** (`--screen`, runtime): not a fixed token. A registered `<color>` custom property, defaulting to `rgb(150 96 52)`, set from the average colour of the playing video sampled every 500ms (2s under reduced motion). It feeds the room wash, the rail-edge glow and the player spill, transitioning over 1.6s. The room keeps the last film's light after playback; only real frames change it.
-- **Film-stock swatch** (`--sw`, runtime): a stable per-filename colour confined to a warm band, `hsl(12–49 42% 26–39%)`, used only on the 16:9 file-row frame until real thumbnails exist.
+- **Film-stock swatch** (`--sw`, runtime): a stable per-filename colour confined to a warm band, `hsl(190–229 24% 22–33%)` (slate to teal, leaving gold to the accent), used only on the 16:9 file-row frame until real thumbnails exist.
 
 ### Tertiary
 
@@ -213,7 +215,7 @@ A brown-black room lit by one amber lamp and by whatever film is on the screen.
 ## Typography
 
 **Display Font:** none.
-**Body Font:** Hanken Grotesk Variable (with ui-sans-serif, system-ui, sans-serif), stylistic set ss01 on globally.
+**Body Font:** Instrument Sans Variable (with ui-sans-serif, system-ui, sans-serif), matching Kiri (runkiri.com). **Mono:** JetBrains Mono Variable for small technical labels only: the format column, the `/` key hint and inline code. Page and file titles are weight 500 with tight tracking (−0.03em), as on Kiri.
 
 **Character:** A single humanist grotesk doing every job, from the 28px page titles to 13px meta lines. Hierarchy comes from weight (400/500/550/600/650/700) and the warm-grey text steps, not from a second family.
 

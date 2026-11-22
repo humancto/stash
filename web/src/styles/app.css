@@ -1,29 +1,34 @@
-/* stash: Projection Booth.
-   The interface is the dark warm room; the film is the light. */
+/* stash: Projection Booth, in Kiri's colours.
+   A dark harbour-night room (navy ink, warm paper text, ember gold); the
+   film is the light. Type: Instrument Sans, JetBrains Mono for labels. */
 
 @property --screen {
   syntax: "<color>";
   inherits: true;
-  initial-value: rgb(150 96 52);
+  initial-value: rgb(120 96 22);
 }
 
 :root {
-  --ground: #14110f;
-  --panel: #1b1714;
-  --raised: #241f1a;
-  --hair: #3a312a;
-  --hair-strong: #4d4238;
-  --text: #f3ece0;
-  --text-2: #bcb09f;
-  --text-3: #968a7a;
-  --amber: #f0a33a;
-  --amber-hover: #f6b65c;
-  --amber-ink: #1f1406;
-  --ready: #a9c79f;
-  --danger: #ec7a6c;
-  --danger-ground: #3a1d18;
+  /* Kiri dark theme (runkiri.com). */
+  --ground: #0f1419;
+  --panel: #131920;
+  --raised: #171e26;
+  --raised-2: #1d252e;
+  --hair: #26303a;
+  --hair-strong: #34404c;
+  --text: #f6f2ea;
+  --text-2: #c9cdd2;
+  --text-3: #9aa3ae;
+  --amber: #e0b420;
+  --amber-hover: color-mix(in srgb, #e0b420 88%, #fff);
+  --amber-ink: #1a1400;
+  --ready: #5cc99a;
+  --danger: #d3675a;
+  --danger-ground: color-mix(in srgb, #d3675a 16%, #0f1419);
+  --danger-text: #f0c4bd;
 
-  --font: "Hanken Grotesk Variable", ui-sans-serif, system-ui, sans-serif;
+  --font: "Instrument Sans Variable", "Instrument Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --t-xs: 0.8125rem; /* 13 */
   --t-sm: 0.875rem; /* 14 */
   --t-md: 1rem; /* 16 */
@@ -53,7 +58,6 @@ body {
   background: var(--ground);
   color: var(--text);
   font: 400 var(--t-md) / 1.5 var(--font);
-  font-feature-settings: "ss01";
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -114,11 +118,11 @@ a {
     color 160ms var(--ease-out);
 }
 .btn:hover {
-  background: #2e2720;
-  border-color: #5e5045;
+  background: var(--raised-2);
+  border-color: color-mix(in srgb, var(--hair-strong) 70%, var(--text-3));
 }
 .btn:active {
-  background: #352d25;
+  background: color-mix(in srgb, var(--raised-2) 80%, var(--hair-strong));
 }
 .btn:disabled,
 .btn[aria-disabled="true"] {
@@ -169,7 +173,7 @@ a {
 .btn--danger-solid {
   background: var(--danger);
   border-color: var(--danger);
-  color: #21100d;
+  color: #1a0a07;
   font-weight: 650;
 }
 .btn--sm {
@@ -377,7 +381,7 @@ a {
   color: var(--text-3);
 }
 .input:hover {
-  border-color: #5e5045;
+  border-color: color-mix(in srgb, var(--hair-strong) 70%, var(--text-3));
 }
 .input:focus-visible {
   outline: none;
@@ -389,6 +393,7 @@ a {
   padding-right: 44px;
 }
 .kbd {
+  font-family: var(--mono);
   position: absolute;
   right: 10px;
   top: 50%;
@@ -418,7 +423,7 @@ a {
   border: 1px solid color-mix(in srgb, var(--danger) 50%, transparent);
   border-radius: var(--r-md);
   background: var(--danger-ground);
-  color: #ffd9d3;
+  color: var(--danger-text);
   font-size: var(--t-sm);
 }
 
@@ -435,8 +440,8 @@ a {
 .page-title {
   margin: 0;
   font-size: var(--t-2xl);
-  font-weight: 700;
-  letter-spacing: -0.025em;
+  font-weight: 500;
+  letter-spacing: -0.032em;
   line-height: 1.15;
 }
 .page-sub {
@@ -555,6 +560,7 @@ a {
   font-size: var(--t-xs);
 }
 .privacy code {
+  font-family: var(--mono);
   padding: 1px 5px;
   border: 1px solid var(--hair);
   border-radius: 4px;
@@ -941,7 +947,7 @@ a {
   border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
   border-radius: var(--r-md);
   background: var(--danger-ground);
-  color: #ffd9d3;
+  color: var(--danger-text);
   font-size: var(--t-sm);
 }
 .banner .btn {
@@ -1108,9 +1114,10 @@ a {
   white-space: nowrap;
 }
 .cell--fmt {
+  font-family: var(--mono);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-size: var(--t-xs);
+  letter-spacing: 0.06em;
+  font-size: 0.75rem;
 }
 
 .status {
@@ -1252,7 +1259,7 @@ a {
   border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
   border-radius: var(--r-md);
   background: var(--danger-ground);
-  color: #ffd9d3;
+  color: var(--danger-text);
   font-size: var(--t-xs);
 }
 
@@ -1325,8 +1332,8 @@ a {
 .watch-title {
   margin: 20px 0 6px;
   font-size: var(--t-2xl);
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-weight: 500;
+  letter-spacing: -0.03em;
   line-height: 1.2;
   overflow-wrap: anywhere;
   text-wrap: balance;
