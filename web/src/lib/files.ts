@@ -76,7 +76,7 @@ export interface FileEntry {
 export function shownFiles(t: Transfer): { f: TorrentFile; fid: number }[] {
   return (t.files ?? [])
     .map((f, fid) => ({ f, fid }))
-    .filter(({ f }) => !f.attributes.padding && !f.attributes.hidden && f.included);
+    .filter(({ f, fid }) => !f.attributes.padding && !f.attributes.hidden && !isDeleted(t, fid));
 }
 
 /** Excluded files are deleted: stash never adds with a file selection. */

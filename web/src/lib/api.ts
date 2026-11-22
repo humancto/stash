@@ -207,7 +207,9 @@ export function parseTransfer(v: unknown): Transfer | null {
     stats: parseStats(v["stats"]),
     seeding: parseTransferSeeding(v["seeding"]),
     deleted: Array.isArray(v["deleted"])
-      ? v["deleted"].map(num).filter((n): n is number => n !== null)
+      ? v["deleted"]
+          .map(num)
+          .filter((n): n is number => n !== null && Number.isInteger(n) && n >= 0)
       : [],
   };
 }

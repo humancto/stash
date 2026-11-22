@@ -69,6 +69,18 @@ describe("keyboard navigation", () => {
     expect(active()).toBe("f1");
   });
 
+  it("moves between rows from a nested list without a rove item", () => {
+    document.body.innerHTML = `
+      <ul data-rove>
+        <li><div><a href="/a" data-rove-item id="t1">A</a></div>
+          <ul><li><a href="/w/0" id="n1">file</a></li></ul></li>
+        <li><a href="/b" data-rove-item id="t2">B</a></li>
+      </ul>`;
+    focus("n1");
+    press("ArrowDown");
+    expect(active()).toBe("t2");
+  });
+
   it("leaves text fields alone and handles /", () => {
     focus("search");
     expect(press("ArrowDown").defaultPrevented).toBe(false);

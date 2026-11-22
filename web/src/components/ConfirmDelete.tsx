@@ -12,6 +12,8 @@ interface Props {
   prompt?: string;
   /** Accessible name for the trigger when its visible label is generic. */
   ariaLabel?: string;
+  /** Part of the surrounding Up/Down list (TV remotes have no Tab). */
+  rove?: boolean;
 }
 
 /** Two-step delete without a modal: the button turns into an inline
@@ -24,7 +26,9 @@ export function ConfirmDelete({
   pausedReason,
   prompt,
   ariaLabel,
+  rove = false,
 }: Props) {
+  const roveItem = rove ? { "data-rove-item": "" } : {};
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,6 +59,7 @@ export function ConfirmDelete({
         className={`btn btn--danger ${className}`}
         aria-disabled={pausedReason ? true : undefined}
         aria-label={ariaLabel}
+        {...roveItem}
         title={pausedReason}
         onClick={() => {
           if (!pausedReason) setAsking(true);
@@ -83,13 +88,20 @@ export function ConfirmDelete({
       ) : (
         <span>{prompt ?? `Delete ${what} and its files from disk?`}</span>
       )}
-      <button ref={cancelRef} type="button" className="btn btn--sm btn--quiet" onClick={() => setAsking(false)}>
+      <button
+        ref={cancelRef}
+        type="button"
+        className="btn btn--sm btn--quiet"
+        onClick={() => setAsking(false)}
+        {...roveItem}
+      >
         Keep
       </button>
       <button
         type="button"
         className="btn btn--sm btn--danger-solid"
         disabled={busy}
+        {...roveItem}
         onClick={async () => {
           setBusy(true);
           setError(null);

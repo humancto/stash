@@ -344,13 +344,17 @@ export function Watch() {
           <ConfirmDelete
             what={`“${name}”`}
             label="Delete file"
-            prompt={`Delete “${name}” from disk? stash won't download it again. If it shares data with the next file, a small part can stay on disk.`}
+            prompt={`Delete “${name}” from disk? stash won't download it again.`}
             pausedReason={writesPaused ?? undefined}
+            rove
             onConfirm={async () => {
               await api.removeFile(tid, fid);
               // Leave first: the next list would show this page's
-              // "deleted" state for a frame.
-              navigate("/files", { replace: true, state: { focusList: true } });
+              // "deleted" state for a frame. Files aims focus past this row.
+              navigate("/files", {
+                replace: true,
+                state: { focusList: true, deletedKey: `${tid}:${fid}` },
+              });
               void transfers.refresh();
             }}
           />
@@ -359,6 +363,7 @@ export function Watch() {
           what={`the whole transfer “${t.name ?? name}”`}
           label="Delete transfer"
           pausedReason={writesPaused ?? undefined}
+          rove
           onConfirm={async () => {
             await transfers.mutate(() => api.remove(tid));
             navigate("/files", { replace: true, state: { focusList: true } });

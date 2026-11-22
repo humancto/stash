@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Link, useLocation, useSearchParams } from "react-router";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { ConfirmDelete } from "../components/ConfirmDelete";
 import { useWritesPaused } from "../components/NetworkStatus";
 import { Status } from "../components/Status";
@@ -118,6 +118,14 @@ function sameRow(a: RowProps, b: RowProps) {
   );
 }
 
+/** Navigation state from the file page after a delete (boundary data). */
+function arrivalFrom(state: unknown): { deletedKey: string | null } | null {
+  if (typeof state !== "object" || state === null) return null;
+  const s = state as Record<string, unknown>;
+  if (s["focusList"] !== true) return null;
+  return { deletedKey: typeof s["deletedKey"] === "string" ? s["deletedKey"] : null };
+}
+
 function Skeleton() {
   return (
     <ul className="list skeleton" aria-hidden="true">
@@ -160,7 +168,11 @@ export function Files() {
   // a TV). Remember where it should go and move it once the row is gone.
   const shownRef = useRef(shown);
   shownRef.current = shown;
-  const deleting = useRef<{ key: string; next: string | null } | null>(null);
+  // `until`: a row that outlives its delete (a failed poll) must not pull
+  // focus away minutes later when it finally goes.
+  const deleting = useRef<{ key: string; next: string | null; until: number } | null>(
+    null,
+  );
   const emptyRef = useRef<HTMLHeadingElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const [announce, setAnnounce] = useState("");
@@ -169,7 +181,7 @@ export function Files() {
     const rows = shownRef.current;
     const i = rows.findIndex((r) => r.key === f.key);
     const next = rows[i + 1] ?? rows[i - 1] ?? null;
-    deleting.current = { key: f.key, next: next?.key ?? null };
+    deleting.current = { key: f.key, next: next?.key ?? null, until: Date.now() + 15_000 };
     try {
       await transfers.mutate(() =>
         f.sole ? api.remove(f.tid) : api.removeFile(f.tid, f.fid),
@@ -185,6 +197,7 @@ export function Files() {
     const d = deleting.current;
     if (!d || shown.some((r) => r.key === d.key)) return;
     deleting.current = null;
+    if (Date.now() > d.until) return;
     const target = d.next
       ? listRef.current?.querySelector<HTMLElement>(`[data-key="${d.next}"]`)
       : null;
@@ -192,16 +205,31 @@ export function Files() {
   }, [shown]);
 
   // Arriving from a delete on the file page: put focus in the list, not on
-  // <body> (where a TV remote can't continue).
+  // <body> (where a TV remote can't continue). The list may still show the
+  // deleted file until the next poll, so aim past it.
   const location = useLocation();
-  const focusList =
-    (location.state as { focusList?: boolean } | null)?.focusList === true;
-  const focusedOnArrival = useRef(false);
+  const navigate = useNavigate();
+  const arrival = useMemo(() => arrivalFrom(location.state), [location.state]);
   useEffect(() => {
-    if (!focusList || loading || focusedOnArrival.current) return;
-    focusedOnArrival.current = true;
-    (listRef.current?.querySelector<HTMLElement>("[data-rove-item]") ?? emptyRef.current)?.focus();
-  }, [focusList, loading]);
+    if (!arrival || loading) return;
+    // Consumed once: going Back to this entry must not grab focus again.
+    navigate(
+      { pathname: location.pathname, search: location.search },
+      { replace: true, state: null },
+    );
+    const rows = shownRef.current;
+    const i = arrival.deletedKey ? rows.findIndex((r) => r.key === arrival.deletedKey) : -1;
+    const focusKey = (k: string) =>
+      listRef.current?.querySelector<HTMLElement>(`[data-key="${k}"]`)?.focus();
+    if (i < 0) {
+      (listRef.current?.querySelector<HTMLElement>("[data-rove-item]") ?? emptyRef.current)?.focus();
+      return;
+    }
+    const next = rows[i + 1] ?? rows[i - 1];
+    if (next) focusKey(next.key);
+    else
+      deleting.current = { key: rows[i]!.key, next: null, until: Date.now() + 15_000 };
+  }, [arrival, loading, navigate, location.pathname, location.search]);
 
   const set = (key: string, value: string | null) => {
     const next = new URLSearchParams(params);
