@@ -551,9 +551,25 @@ fn find_marker(toks: &[Tok]) -> Option<(usize, Marker)> {
             ));
         }
         let l = lower(&t.text);
-        // "Season 1", "Season 1 Episode 2"
+        // "S01-S05" season range (a pack): the first season.
+        if let Some((a, b)) = t.text.split_once('-')
+            && let (Some((sa, ea)), Some((_, eb))) = (season_episode(a), season_episode(b))
+            && ea.is_empty()
+            && eb.is_empty()
+        {
+            return Some((
+                i,
+                Marker::Episode {
+                    season: Some(sa),
+                    episodes: Vec::new(),
+                },
+            ));
+        }
+        // "Season 1", "Season 1-5", "Season 1 Episode 2"
         if l == "season"
-            && let Some(s) = toks.get(i + 1).and_then(|n| number(&n.text))
+            && let Some(s) = toks
+                .get(i + 1)
+                .and_then(|n| number(n.text.split('-').next().unwrap_or("")))
         {
             let ep = (toks.get(i + 2).map(|t| lower(&t.text)).as_deref() == Some("episode"))
                 .then(|| toks.get(i + 3).and_then(|n| number(&n.text)))
@@ -1043,6 +1059,22 @@ mod tests {
             (
                 "Some Show/Season 1/Episode 2.mkv",
                 ep("Some Show", Some(1), &[2]),
+            ),
+            (
+                "Severance Season 1-2/Season 2/01 - Hello, Ms. Cobel.mkv",
+                ep("Severance", Some(2), &[1]),
+            ),
+            (
+                "Breaking Bad Season 1-5 Complete/Season 3/05 - Mas.mkv",
+                ep("Breaking Bad", Some(3), &[5]),
+            ),
+            (
+                "Breaking.Bad.S01-S05.1080p/Breaking.Bad.S02E03.mkv",
+                ep("Breaking Bad", Some(2), &[3]),
+            ),
+            (
+                "Breaking.Bad.S01-S05.1080p/Season 4/07.mkv",
+                ep("Breaking Bad", Some(4), &[7]),
             ),
             ("Sherlock.S00E01.mkv", ep("Sherlock", Some(0), &[1])),
             (

@@ -503,24 +503,28 @@ fn library_input(api: &Api) -> Vec<library::TransferIn> {
         .into_iter()
         .filter_map(|t| {
             let id = t.id?;
-            let files = api
-                .api_torrent_details(TorrentIdOrHash::Id(id))
-                .ok()
-                .and_then(|d| d.files)
-                .map(|files| {
-                    files
-                        .into_iter()
-                        .enumerate()
-                        .filter(|(_, f)| {
-                            f.included && !f.attributes.padding && !f.attributes.hidden
-                        })
-                        .map(|(fid, f)| library::FileIn {
-                            fid,
-                            components: f.components,
-                            length: f.length,
-                        })
-                        .collect()
-                });
+            let details = api.api_torrent_details(TorrentIdOrHash::Id(id)).ok();
+            let name = details.as_ref().and_then(|d| d.name.clone());
+            let files = details.and_then(|d| d.files).map(|files| {
+                // A multi-file torrent's paths leave out its top folder (the
+                // torrent's name), which often names the show or film.
+                let single = files.len() == 1 && files[0].components.len() == 1;
+                files
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(_, f)| f.included && !f.attributes.padding && !f.attributes.hidden)
+                    .map(|(fid, f)| library::FileIn {
+                        fid,
+                        components: match (&name, single) {
+                            (Some(n), false) => {
+                                std::iter::once(n.clone()).chain(f.components).collect()
+                            }
+                            _ => f.components,
+                        },
+                        length: f.length,
+                    })
+                    .collect()
+            });
             Some(library::TransferIn {
                 tid: id,
                 info_hash: t.info_hash,
