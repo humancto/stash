@@ -10,7 +10,7 @@ Ordered by priority. One item per branch and PR, reviewed by the matching expert
 - [x] **network-status**: Show what torrent peers see: the outbound interface for IPv4 and IPv6, whether it is a VPN tunnel, and the public IP and country. `GET /api/network`, plus a status chip in the rail and a panel on Transfers.
 - [x] **network-privacy**: Fixed listen port over TCP + uTP, UPnP toggle, bind torrent traffic to a named interface (VPN kill switch), peer limit, all via env/config. Document VPN + port-forwarding setup. Kill switch levels (strict / warn / off) and a peer IP blocklist (user request 2026-11-16).
 - [x] **seeding-policy**: Stop seeding as soon as a download finishes, on by default (first-class rule; user request 2026-11-16). Optional ratio or time limit instead.
-- [ ] **file-delete**: Delete a single downloaded file (not the whole transfer) from the Files list and the file page: deselect it in the torrent so it is not downloaded again, remove it from disk, confirm first (user request 2026-11-16).
+- [x] **file-delete**: Delete a single downloaded file (not the whole transfer) from the Files list and the file page: deselect it in the torrent so it is not downloaded again, remove it from disk, confirm first (user request 2026-11-16).
 - [ ] **vpn-port-forwarding**: NAT-PMP for Proton and similar VPNs: request and renew the forwarded port, listen on it, follow it when it changes.
 - [ ] **auth**: Access control before exposing beyond localhost (login or token), safe for LAN/Tailscale family use.
 
