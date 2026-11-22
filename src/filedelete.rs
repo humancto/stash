@@ -62,7 +62,9 @@ fn open_parent(root: &Path, rel: &Path) -> Result<Option<(OwnedFd, CString)>, Re
         let fd = unsafe {
             match at {
                 Some(d) => libc::openat(d.as_raw_fd(), part.as_ptr(), flags | libc::O_NOFOLLOW),
-                None => libc::open(part.as_ptr(), flags),
+                // The canonical root has no symlinks; O_NOFOLLOW refuses one
+                // swapped in for its last component since.
+                None => libc::open(part.as_ptr(), flags | libc::O_NOFOLLOW),
             }
         };
         if fd >= 0 {
@@ -104,28 +106,39 @@ fn unlink_at(dir: &OwnedFd, name: &CString) -> Result<(), Refused> {
     }
 }
 
-/// Removes the file, returning the bytes freed. Truncates first (through
-/// our own handle, so the space comes back even though librqbit keeps the
-/// file open), unless other hard links share the data: then it only
-/// unlinks this name and frees nothing. Missing = already gone.
-pub fn remove(root: &Path, rel: &Path, torrent_len: u64) -> Result<u64, Refused> {
+/// What removing a file did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Removed {
+    /// Bytes given back to the disk.
+    pub freed: u64,
+    /// The path held data: librqbit's next start must recheck.
+    pub had_data: bool,
+}
+
+/// Removes the file. Truncates first (through our own handle, so the space
+/// comes back even though librqbit keeps the file open), unless other hard
+/// links share the data: then it only unlinks this name and frees nothing.
+/// Missing = already gone.
+pub fn remove(root: &Path, rel: &Path, torrent_len: u64) -> Result<Removed, Refused> {
     let Some((dir, name)) = open_parent(root, rel)? else {
-        return Ok(0);
+        return Ok(Removed::default());
     };
     // SAFETY: valid fd and C string.
     let fd = unsafe {
         libc::openat(
             dir.as_raw_fd(),
             name.as_ptr(),
-            libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            // O_NONBLOCK: a FIFO at this path must not hang the open; fstat
+            // below rejects anything that isn't a regular file.
+            libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
         )
     };
     if fd < 0 {
         let e = io::Error::last_os_error();
         return match e.raw_os_error() {
-            Some(libc::ENOENT) => Ok(0),
-            // O_NOFOLLOW on a symlink: ELOOP.
-            Some(libc::ELOOP | libc::EISDIR) => Err(Refused::NotAFile),
+            Some(libc::ENOENT) => Ok(Removed::default()),
+            // O_NOFOLLOW on a symlink: ELOOP. A FIFO without a reader: ENXIO.
+            Some(libc::ELOOP | libc::EISDIR | libc::ENXIO) => Err(Refused::NotAFile),
             _ => Err(Refused::Io(e)),
         };
     }
@@ -138,6 +151,7 @@ pub fn remove(root: &Path, rel: &Path, torrent_len: u64) -> Result<u64, Refused>
     if meta.len() > torrent_len {
         return Err(Refused::NotOurs);
     }
+    let had_data = meta.len() > 0;
     let freed = if meta.nlink() == 1 {
         let freed = meta.blocks().saturating_mul(512);
         file.set_len(0).map_err(Refused::Io)?;
@@ -147,7 +161,45 @@ pub fn remove(root: &Path, rel: &Path, torrent_len: u64) -> Result<u64, Refused>
     };
     drop(file);
     unlink_at(&dir, &name)?;
-    Ok(freed)
+    Ok(Removed { freed, had_data })
+}
+
+/// Size of a regular file at `root/rel` without following symlinks; None
+/// when it isn't there.
+pub fn size_on_disk(root: &Path, rel: &Path) -> Result<Option<u64>, Refused> {
+    let Some((dir, name)) = open_parent(root, rel)? else {
+        return Ok(None);
+    };
+    match stat_at(&dir, &name)? {
+        None => Ok(None),
+        Some(st) if (st.st_mode & libc::S_IFMT) == libc::S_IFREG => {
+            Ok(Some(u64::try_from(st.st_size).unwrap_or(0)))
+        }
+        Some(_) => Err(Refused::NotAFile),
+    }
+}
+
+fn stat_at(dir: &OwnedFd, name: &CString) -> Result<Option<libc::stat>, Refused> {
+    // SAFETY: an all-zero `stat` is a valid value of this plain C struct.
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: valid fd, valid C string, and `st` is a live out-parameter.
+    let rc = unsafe {
+        libc::fstatat(
+            dir.as_raw_fd(),
+            name.as_ptr(),
+            &mut st,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if rc == 0 {
+        return Ok(Some(st));
+    }
+    let e = io::Error::last_os_error();
+    if e.kind() == io::ErrorKind::NotFound {
+        Ok(None)
+    } else {
+        Err(Refused::Io(e))
+    }
 }
 
 /// Does file `fid` share a piece with another included, non-padding file?
@@ -172,24 +224,9 @@ pub fn remove_placeholder(root: &Path, rel: &Path) -> Result<bool, Refused> {
     let Some((dir, name)) = open_parent(root, rel)? else {
         return Ok(false);
     };
-    // SAFETY: zeroed stat is a valid out-parameter; valid fd and C string.
-    let mut st: libc::stat = unsafe { std::mem::zeroed() };
-    let rc = unsafe {
-        libc::fstatat(
-            dir.as_raw_fd(),
-            name.as_ptr(),
-            &mut st,
-            libc::AT_SYMLINK_NOFOLLOW,
-        )
+    let Some(st) = stat_at(&dir, &name)? else {
+        return Ok(false);
     };
-    if rc != 0 {
-        let e = io::Error::last_os_error();
-        return if e.kind() == io::ErrorKind::NotFound {
-            Ok(false)
-        } else {
-            Err(Refused::Io(e))
-        };
-    }
     if (st.st_mode & libc::S_IFMT) != libc::S_IFREG || st.st_size != 0 || st.st_nlink != 1 {
         return Ok(false);
     }
@@ -269,8 +306,14 @@ mod tests {
         ));
         assert_eq!(std::fs::read(outside.path().join("f")).unwrap(), b"keep");
         // missing parent → already gone
-        assert!(matches!(remove(d.path(), Path::new("no/such/f"), 9), Ok(0)));
-        assert!(matches!(remove(d.path(), Path::new("missing"), 9), Ok(0)));
+        assert_eq!(
+            remove(d.path(), Path::new("no/such/f"), 9).unwrap(),
+            Removed::default()
+        );
+        assert_eq!(
+            remove(d.path(), Path::new("missing"), 9).unwrap(),
+            Removed::default()
+        );
     }
 
     #[test]
@@ -280,8 +323,8 @@ mod tests {
         std::fs::write(&p, vec![7u8; 64 * 1024]).unwrap();
         // librqbit's handle stays open across the delete.
         let held = std::fs::File::open(&p).unwrap();
-        let freed = remove(d.path(), Path::new("movie.mkv"), 64 * 1024).unwrap();
-        assert!(freed > 0);
+        let r = remove(d.path(), Path::new("movie.mkv"), 64 * 1024).unwrap();
+        assert!(r.freed > 0 && r.had_data);
         assert!(!p.exists());
         assert_eq!(held.metadata().unwrap().len(), 0, "inode truncated");
     }
@@ -293,7 +336,13 @@ mod tests {
         std::fs::write(&p, b"precious").unwrap();
         let other = d.path().join("library.mkv");
         std::fs::hard_link(&p, &other).unwrap();
-        assert_eq!(remove(d.path(), Path::new("a.mkv"), 8).unwrap(), 0);
+        assert_eq!(
+            remove(d.path(), Path::new("a.mkv"), 8).unwrap(),
+            Removed {
+                freed: 0,
+                had_data: true
+            }
+        );
         assert!(!p.exists());
         assert_eq!(std::fs::read(&other).unwrap(), b"precious");
     }
@@ -320,6 +369,26 @@ mod tests {
             Err(Refused::NotOurs)
         ));
         assert!(d.path().join("big").exists());
+    }
+
+    #[test]
+    fn fifo_and_size() {
+        let d = tempfile::tempdir().unwrap();
+        let fifo = CString::new(d.path().join("pipe").as_os_str().as_bytes()).unwrap();
+        // SAFETY: valid C string.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        // Must not hang waiting for a reader.
+        assert!(matches!(
+            remove(d.path(), Path::new("pipe"), 9),
+            Err(Refused::NotAFile)
+        ));
+        assert!(matches!(
+            size_on_disk(d.path(), Path::new("pipe")),
+            Err(Refused::NotAFile)
+        ));
+        std::fs::write(d.path().join("f"), b"abc").unwrap();
+        assert_eq!(size_on_disk(d.path(), Path::new("f")).unwrap(), Some(3));
+        assert_eq!(size_on_disk(d.path(), Path::new("none")).unwrap(), None);
     }
 
     #[test]

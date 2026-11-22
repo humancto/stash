@@ -123,6 +123,10 @@ pub struct Entry {
     /// Paused by the seeding rule (not by the user).
     #[serde(default)]
     pub stopped_by_rule: bool,
+    /// Started by stash (not the user) to fetch pieces lost in the recheck
+    /// after a file delete. Cleared when the rule pauses it or the user acts.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub repairing: bool,
 }
 
 impl Entry {
@@ -254,11 +258,11 @@ pub fn decide(policy: Policy, keep: bool, e: &Entry, v: &View, now: u64) -> Verd
     // While initializing, `finished` is not known yet; a torrent stash has
     // already seen finished is paused before it can announce as a seeder.
     // Not while a recheck is pending: pausing then aborts the check and
-    // leaves the transfer unverified (nothing in it could stream). Not when
-    // the rule had stopped it either: then it was only live because stash
-    // restarted it to fetch pieces lost after a file delete.
-    let finished = v.finished
-        || (v.starting && !v.recheck_pending && !e.stopped_by_rule && e.finished_at.is_some());
+    // leaves the transfer unverified (nothing in it could stream). Not while
+    // stash is repairing it either: it was only live to fetch pieces lost
+    // after a file delete, so it isn't known to be finished.
+    let finished =
+        v.finished || (v.starting && !v.recheck_pending && !e.repairing && e.finished_at.is_some());
     if (v.live || v.starting) && finished && done(policy, e, v.total_bytes, now) {
         Verdict::Pause
     } else {
@@ -321,17 +325,58 @@ impl From<librqbit::ApiError> for DeleteError {
     }
 }
 
-/// Should the enforcer restart a transfer to fetch pieces it lost in the
-/// recheck after a file delete? Only one the rule had stopped (never one
-/// the user paused), once the recheck is over.
+/// Should the enforcer restart a transfer (one with deleted files) to fetch
+/// pieces it lost in the recheck after a delete? Only one the rule had
+/// stopped (never one the user paused), once the recheck is over. Any other
+/// cause of a rule-stopped transfer going unfinished (say, disk damage
+/// found by a recheck) gets the same treatment, which is what it needs too.
 pub fn needs_repair(
-    has_deletions: bool,
     paused: bool,
     finished: bool,
     stopped_by_rule: bool,
     recheck_pending: bool,
 ) -> bool {
-    has_deletions && paused && !finished && stopped_by_rule && !recheck_pending
+    paused && !finished && stopped_by_rule && !recheck_pending
+}
+
+/// What deleting file `fid` has to do, from the torrent's file list, the
+/// current selection and whether an earlier attempt is pending.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DeleteStep {
+    /// Already deleted: never touch the path again (it may hold pieces a
+    /// kept neighbour needs).
+    Nothing,
+    /// Deselect, then remove from disk.
+    Deselect,
+    /// Deselected by an attempt that didn't finish: the disk step only.
+    Recover,
+}
+
+pub fn plan_delete(
+    files: &[librqbit::file_info::FileInfo],
+    included: &[usize],
+    fid: usize,
+    pending: bool,
+) -> Result<DeleteStep, DeleteError> {
+    files
+        .get(fid)
+        .filter(|f| !f.attrs.padding)
+        .ok_or(DeleteError::NoSuchFile)?;
+    if !included.contains(&fid) {
+        return Ok(if pending {
+            DeleteStep::Recover
+        } else {
+            DeleteStep::Nothing
+        });
+    }
+    let others = included
+        .iter()
+        .any(|&o| o != fid && files.get(o).is_some_and(filedelete::visible));
+    if others {
+        Ok(DeleteStep::Deselect)
+    } else {
+        Err(DeleteError::LastFile)
+    }
 }
 
 /// "Already paused" from librqbit is success; checked by state, not text.
@@ -436,6 +481,7 @@ impl Seeding {
         let e = s.torrents.entry(hash.clone()).or_default();
         e.account(&self.boot, live_uploaded(&st));
         e.stopped_by_rule = false;
+        e.repairing = false;
         let known_finished = st.finished || e.finished_at.is_some();
         if known_finished
             && policy != Policy::Forever
@@ -461,6 +507,7 @@ impl Seeding {
         let e = s.torrents.entry(hash.clone()).or_default();
         e.account(&self.boot, live_uploaded(&st));
         e.stopped_by_rule = false;
+        e.repairing = false;
         s.keep_seeding.remove(&hash);
         self.save(&s).await;
         api.api_torrent_action_pause(id).await
@@ -505,7 +552,7 @@ impl Seeding {
         id: TorrentIdOrHash,
         fid: usize,
     ) -> Result<u64, DeleteError> {
-        let (hash, root, rel, len) = {
+        let (hash, root, rel, len, step, shares) = {
             let mut s = self.state.lock().await;
             let h = api.mgr_handle(id)?;
             let hash = h.info_hash().as_string();
@@ -515,59 +562,81 @@ impl Seeding {
             let files = h
                 .with_metadata(|m| m.file_infos.clone())
                 .map_err(|_| DeleteError::Checking)?;
-            let f = files
-                .get(fid)
-                .filter(|f| !f.attrs.padding)
-                .ok_or(DeleteError::NoSuchFile)?;
             let included: Vec<usize> = h.only_files().unwrap_or_else(|| (0..files.len()).collect());
-            let is_included = included.contains(&fid);
-            let state = s.deleted.get(&hash).and_then(|m| m.get(&fid)).copied();
-            if !is_included && state != Some(Deletion::Pending) {
-                // Already deleted (or never selected): nothing to do. The
-                // path is never touched again, it may hold pieces a kept
-                // neighbour still needs.
+            let pending =
+                s.deleted.get(&hash).and_then(|m| m.get(&fid)) == Some(&Deletion::Pending);
+            let step = plan_delete(&files, &included, fid, pending)?;
+            if step == DeleteStep::Nothing {
                 return Ok(0);
             }
-            if is_included {
-                let others = included
-                    .iter()
-                    .any(|&o| o != fid && files.get(o).is_some_and(filedelete::visible));
-                if !others {
-                    return Err(DeleteError::LastFile);
-                }
-            }
+            let keep: Vec<usize> = included.into_iter().filter(|&o| o != fid).collect();
             s.deleted
                 .entry(hash.clone())
                 .or_default()
                 .insert(fid, Deletion::Pending);
-            s.recheck_pending.insert(hash.clone(), self.boot.clone());
-            self.save(&s).await;
-            if is_included {
-                let keep: std::collections::HashSet<usize> =
-                    included.into_iter().filter(|&o| o != fid).collect();
-                api.api_torrent_action_update_only_files(id, &keep).await?;
+            if step == DeleteStep::Deselect {
+                // Recorded first: a crash after the disk step must still
+                // keep the next start's recheck from being aborted.
+                let prev = s.recheck_pending.insert(hash.clone(), self.boot.clone());
+                self.save(&s).await;
+                let set: HashSet<usize> = keep.iter().copied().collect();
+                if let Err(e) = api.api_torrent_action_update_only_files(id, &set).await {
+                    // The user sees this fail: nothing may finish it later.
+                    if let Some(m) = s.deleted.get_mut(&hash) {
+                        m.remove(&fid);
+                        if m.is_empty() {
+                            s.deleted.remove(&hash);
+                        }
+                    }
+                    match prev {
+                        Some(b) => s.recheck_pending.insert(hash.clone(), b),
+                        None => s.recheck_pending.remove(&hash),
+                    };
+                    self.save(&s).await;
+                    return Err(e.into());
+                }
             }
+            let f = &files[fid];
             (
                 hash,
                 h.output_folder().to_path_buf(),
                 f.relative_filename.clone(),
                 f.len,
+                step,
+                filedelete::shares_selected_piece(&files, fid, &keep),
             )
         };
-        let result = tokio::task::spawn_blocking(move || filedelete::remove(&root, &rel, len))
-            .await
-            .unwrap_or_else(|e| Err(filedelete::Refused::Io(std::io::Error::other(e))));
+        let result = tokio::task::spawn_blocking(move || {
+            // Recovering in a later start: librqbit may have recreated an
+            // empty file there that a kept neighbour's piece will be written
+            // into; unlinking it would cost another full recheck.
+            if step == DeleteStep::Recover
+                && shares
+                && matches!(filedelete::size_on_disk(&root, &rel)?, None | Some(0))
+            {
+                return Ok(filedelete::Removed::default());
+            }
+            filedelete::remove(&root, &rel, len)
+        })
+        .await
+        .unwrap_or_else(|e| Err(filedelete::Refused::Io(std::io::Error::other(e))));
         let mut s = self.state.lock().await;
         // Done either way: a refused path is left alone (and reported), not
         // retried forever. Gone if the transfer was deleted meanwhile.
         if let Some(d) = s.deleted.get_mut(&hash).and_then(|m| m.get_mut(&fid)) {
             *d = Deletion::Done;
         }
+        if let Ok(r) = &result
+            && r.had_data
+        {
+            // Data left the path: the next start rechecks.
+            s.recheck_pending.insert(hash.clone(), self.boot.clone());
+        }
         self.save(&s).await;
         match result {
-            Ok(freed) => {
-                tracing::info!(info_hash = %hash, file = fid, freed, "deleted a file");
-                Ok(freed)
+            Ok(r) => {
+                tracing::info!(info_hash = %hash, file = fid, freed = r.freed, "deleted a file");
+                Ok(r.freed)
             }
             Err(e) => {
                 tracing::warn!(info_hash = %hash, file = fid, error = %e, "deselected a file but left it on disk");
@@ -644,12 +713,11 @@ impl Seeding {
                     return;
                 };
                 // Re-checked under the lock: the user may have acted since.
-                let s = self.state.lock().await;
+                let mut s = self.state.lock().await;
                 let Ok(h) = api.mgr_handle(id) else { continue };
                 let st = h.stats();
                 let e = s.torrents.get(&w.hash).cloned().unwrap_or_default();
                 if !needs_repair(
-                    true,
                     matches!(st.state, TorrentStatsState::Paused),
                     st.finished,
                     e.stopped_by_rule,
@@ -659,6 +727,10 @@ impl Seeding {
                 }
                 match api.api_torrent_action_start(id).await {
                     Ok(_) => {
+                        if let Some(e) = s.torrents.get_mut(&w.hash) {
+                            e.repairing = true;
+                        }
+                        self.save(&s).await;
                         tracing::info!(info_hash = %w.hash, "fetching pieces lost after a file delete")
                     }
                     Err(err) => {
@@ -731,9 +803,13 @@ impl Seeding {
                             .filter(|(_, d)| **d == Deletion::Done)
                             .map(|(f, _)| *f)
                             .collect(),
-                        clean: true,
+                        // Once it is Paused or Live: an errored transfer
+                        // re-inits (and recreates placeholders) when started.
+                        clean: matches!(
+                            st.state,
+                            TorrentStatsState::Paused | TorrentStatsState::Live
+                        ),
                         repair: needs_repair(
-                            true,
                             matches!(st.state, TorrentStatsState::Paused),
                             st.finished,
                             stopped,
@@ -789,6 +865,7 @@ impl Seeding {
                 // Only marked once the pause actually happened.
                 if let Some(e) = s.torrents.get_mut(&hash) {
                     e.stopped_by_rule = true;
+                    e.repairing = false;
                 }
                 tracing::info!(name = ?h.name(), info_hash = %hash, uploaded, reason = ?policy, "stopped seeding");
             }
@@ -967,11 +1044,22 @@ mod tests {
         // at the next start before it knows whether it finished.
         let repairing = Entry {
             stopped_by_rule: true,
+            repairing: true,
             ..entry(0, Some(now))
         };
         assert_eq!(
             decide(Policy::Stop, false, &repairing, &starting, now),
             Verdict::Leave
+        );
+        // Rule-stopped but not repairing (its paused flag wasn't saved):
+        // still paused before it can announce.
+        let rule_stopped = Entry {
+            stopped_by_rule: true,
+            ..entry(0, Some(now))
+        };
+        assert_eq!(
+            decide(Policy::Stop, false, &rule_stopped, &starting, now),
+            Verdict::Pause
         );
         // Once it is live and finished again, the rule applies as usual.
         let live_done = View {
@@ -986,21 +1074,61 @@ mod tests {
 
     #[test]
     fn repair_only_rule_stopped() {
-        assert!(needs_repair(true, true, false, true, false));
-        assert!(
-            !needs_repair(true, true, false, false, false),
-            "user paused"
+        assert!(needs_repair(true, false, true, false));
+        assert!(!needs_repair(true, false, false, false), "user paused");
+        assert!(!needs_repair(true, true, true, false), "finished");
+        assert!(!needs_repair(false, false, true, false), "live");
+        assert!(!needs_repair(true, false, true, true), "recheck pending");
+    }
+
+    #[test]
+    fn delete_plan() {
+        use librqbit::{FileDetailsAttrs, file_info::FileInfo};
+        let fi = |padding: bool, hidden: bool| FileInfo {
+            relative_filename: PathBuf::from("x"),
+            offset_in_torrent: 0,
+            piece_range: 0..1,
+            attrs: FileDetailsAttrs {
+                padding,
+                hidden,
+                ..Default::default()
+            },
+            len: 1,
+        };
+        // 0, 1 visible; 2 padding; 3 hidden.
+        let files = [
+            fi(false, false),
+            fi(false, false),
+            fi(true, false),
+            fi(false, true),
+        ];
+        let all = [0, 1, 2, 3];
+        assert_eq!(
+            plan_delete(&files, &all, 0, false).unwrap(),
+            DeleteStep::Deselect
         );
-        assert!(!needs_repair(true, true, true, true, false), "finished");
-        assert!(!needs_repair(true, false, false, true, false), "live");
-        assert!(
-            !needs_repair(true, true, false, true, true),
-            "recheck pending"
+        // already deleted: never touched again; pending: finish the disk step
+        assert_eq!(
+            plan_delete(&files, &[1, 2, 3], 0, false).unwrap(),
+            DeleteStep::Nothing
         );
-        assert!(
-            !needs_repair(false, true, false, true, false),
-            "no deletions"
+        assert_eq!(
+            plan_delete(&files, &[1, 2, 3], 0, true).unwrap(),
+            DeleteStep::Recover
         );
+        // the last visible file (padding and hidden don't count)
+        assert!(matches!(
+            plan_delete(&files, &[1, 2, 3], 1, false),
+            Err(DeleteError::LastFile)
+        ));
+        assert!(matches!(
+            plan_delete(&files, &all, 2, false),
+            Err(DeleteError::NoSuchFile)
+        ));
+        assert!(matches!(
+            plan_delete(&files, &all, 9, false),
+            Err(DeleteError::NoSuchFile)
+        ));
     }
 
     #[test]
