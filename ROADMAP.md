@@ -24,7 +24,7 @@ Ordered by priority. One item per branch and PR, reviewed by the matching expert
 
 ## P1.5: library (user request 2026-11-21)
 
-- [ ] **magnet-handler**: Register stash as the browser's `magnet:` handler; paste a magnet/URL anywhere to add it; drop a `.torrent` file on the page.
+- [x] **magnet-handler**: Register stash as the browser's `magnet:` handler; paste a magnet/URL anywhere to add it; drop a `.torrent` file on the page.
 - [ ] **command-palette**: Cmd+K: search files, add a magnet, jump to a page.
 - [ ] **folder-zip**: Download a transfer or folder as one zip, streamed on the fly (no temp copy).
 - [ ] **library-posters**: Parse film/show names from file names; optional TMDB lookup (off by default, user key) for posters, titles, seasons; a poster Library view next to Files.
