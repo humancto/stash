@@ -1,7 +1,18 @@
 import { File, FileText, Image, Music, Play } from "lucide-react";
-import { memo, useMemo } from "react";
-import { Link, useSearchParams } from "react-router";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
+import { ConfirmDelete } from "../components/ConfirmDelete";
+import { useWritesPaused } from "../components/NetworkStatus";
 import { Status } from "../components/Status";
+import { api } from "../lib/api";
 import {
   flatten,
   selectFiles,
@@ -37,10 +48,22 @@ function KindIcon({ kind }: { kind: Kind }) {
   }
 }
 
-const FileRow = memo(function FileRow({ f }: { f: FileEntry }) {
+interface RowProps {
+  f: FileEntry;
+  pausedReason: string | null;
+  /** Stable across renders (see Files), so the memo can ignore it. */
+  onDelete: (f: FileEntry) => Promise<void>;
+}
+
+const FileRow = memo(function FileRow({ f, pausedReason, onDelete }: RowProps) {
   return (
-    <li>
-      <Link className="row" to={`/watch/${f.tid}/${f.fid}`} data-rove-item>
+    <li className="file-item">
+      <Link
+        className="row"
+        to={`/watch/${f.tid}/${f.fid}`}
+        data-rove-item
+        data-key={f.key}
+      >
         <span
           className="frame"
           style={{ "--sw": swatch(f.name) } as React.CSSProperties}
@@ -62,12 +85,29 @@ const FileRow = memo(function FileRow({ f }: { f: FileEntry }) {
           <Status status={f.status} />
         </span>
       </Link>
+      <ConfirmDelete
+        className="btn--quiet btn--sm row-delete"
+        label=""
+        what={f.sole ? `the whole transfer “${f.transferName}”` : `“${f.name}”`}
+        ariaLabel={
+          f.sole ? `Delete transfer “${f.transferName}”` : `Delete “${f.name}”`
+        }
+        prompt={
+          f.sole
+            ? `Delete the whole transfer “${f.transferName}” from disk?`
+            : "Delete this file from disk? stash won't download it again."
+        }
+        pausedReason={pausedReason ?? undefined}
+        onConfirm={() => onDelete(f)}
+      />
     </li>
   );
 }, sameRow);
 
-function sameRow(a: { f: FileEntry }, b: { f: FileEntry }) {
+function sameRow(a: RowProps, b: RowProps) {
   return (
+    a.pausedReason === b.pausedReason &&
+    a.f.sole === b.f.sole &&
     a.f.key === b.f.key &&
     a.f.name === b.f.name &&
     a.f.path === b.f.path &&
@@ -76,6 +116,14 @@ function sameRow(a: { f: FileEntry }, b: { f: FileEntry }) {
     a.f.kind === b.f.kind &&
     JSON.stringify(a.f.status) === JSON.stringify(b.f.status)
   );
+}
+
+/** Navigation state from the file page after a delete (boundary data). */
+function arrivalFrom(state: unknown): { deletedKey: string | null } | null {
+  if (typeof state !== "object" || state === null) return null;
+  const s = state as Record<string, unknown>;
+  if (s["focusList"] !== true) return null;
+  return { deletedKey: typeof s["deletedKey"] === "string" ? s["deletedKey"] : null };
 }
 
 function Skeleton() {
@@ -114,6 +162,74 @@ export function Files() {
     () => selectFiles(all, filter, q, sort),
     [all, filter, q, sort],
   );
+
+  const writesPaused = useWritesPaused();
+  // After a delete the row unmounts, so focus would fall to <body> (lost on
+  // a TV). Remember where it should go and move it once the row is gone.
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  // `until`: a row that outlives its delete (a failed poll) must not pull
+  // focus away minutes later when it finally goes.
+  const deleting = useRef<{ key: string; next: string | null; until: number } | null>(
+    null,
+  );
+  const emptyRef = useRef<HTMLHeadingElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const [announce, setAnnounce] = useState("");
+
+  const onDelete = useCallback(async (f: FileEntry) => {
+    const rows = shownRef.current;
+    const i = rows.findIndex((r) => r.key === f.key);
+    const next = rows[i + 1] ?? rows[i - 1] ?? null;
+    deleting.current = { key: f.key, next: next?.key ?? null, until: Date.now() + 15_000 };
+    try {
+      await transfers.mutate(() =>
+        f.sole ? api.remove(f.tid) : api.removeFile(f.tid, f.fid),
+      );
+      setAnnounce(f.sole ? `Deleted transfer “${f.transferName}”` : `Deleted “${f.name}”`);
+    } catch (e) {
+      deleting.current = null;
+      throw e;
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    const d = deleting.current;
+    if (!d || shown.some((r) => r.key === d.key)) return;
+    deleting.current = null;
+    if (Date.now() > d.until) return;
+    const target = d.next
+      ? listRef.current?.querySelector<HTMLElement>(`[data-key="${d.next}"]`)
+      : null;
+    (target ?? emptyRef.current ?? listRef.current?.querySelector<HTMLElement>("[data-rove-item]"))?.focus();
+  }, [shown]);
+
+  // Arriving from a delete on the file page: put focus in the list, not on
+  // <body> (where a TV remote can't continue). The list may still show the
+  // deleted file until the next poll, so aim past it.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const arrival = useMemo(() => arrivalFrom(location.state), [location.state]);
+  useEffect(() => {
+    if (!arrival || loading) return;
+    // Consumed once: going Back to this entry must not grab focus again.
+    navigate(
+      { pathname: location.pathname, search: location.search },
+      { replace: true, state: null },
+    );
+    const rows = shownRef.current;
+    const i = arrival.deletedKey ? rows.findIndex((r) => r.key === arrival.deletedKey) : -1;
+    const focusKey = (k: string) =>
+      listRef.current?.querySelector<HTMLElement>(`[data-key="${k}"]`)?.focus();
+    if (i < 0) {
+      (listRef.current?.querySelector<HTMLElement>("[data-rove-item]") ?? emptyRef.current)?.focus();
+      return;
+    }
+    const next = rows[i + 1] ?? rows[i - 1];
+    if (next) focusKey(next.key);
+    else
+      deleting.current = { key: rows[i]!.key, next: null, until: Date.now() + 15_000 };
+  }, [arrival, loading, navigate, location.pathname, location.search]);
 
   const set = (key: string, value: string | null) => {
     const next = new URLSearchParams(params);
@@ -186,7 +302,9 @@ export function Files() {
         <Skeleton />
       ) : all.length === 0 && error ? null : all.length === 0 ? (
         <div className="empty">
-          <h2>Nothing here yet</h2>
+          <h2 ref={emptyRef} tabIndex={-1}>
+            Nothing here yet
+          </h2>
           <p>
             Paste a magnet link in the box above. Files show up here as soon as
             the transfer knows what's inside, and video can play while it
@@ -195,7 +313,9 @@ export function Files() {
         </div>
       ) : shown.length === 0 ? (
         <div className="empty">
-          <h2>No files match</h2>
+          <h2 ref={emptyRef} tabIndex={-1}>
+            No files match
+          </h2>
           <p>
             {q ? `Nothing matches “${q}” in ` : "Nothing in "}
             {filter === "all"
@@ -212,12 +332,20 @@ export function Files() {
           </button>
         </div>
       ) : (
-        <ul className="list" data-rove aria-label="Files">
+        <ul className="list" data-rove aria-label="Files" ref={listRef}>
           {shown.map((f) => (
-            <FileRow key={f.key} f={f} />
+            <FileRow
+              key={f.key}
+              f={f}
+              pausedReason={writesPaused}
+              onDelete={onDelete}
+            />
           ))}
         </ul>
       )}
+      <p className="visually-hidden" aria-live="polite">
+        {announce}
+      </p>
     </div>
   );
 }

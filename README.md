@@ -58,6 +58,16 @@ By default stash stops sharing a transfer as soon as it finishes: it pauses it (
 - **Upgrade note:** transfers that were finished and seeding stop seeding a few seconds after you start this version, unless you pick "Keep seeding".
 - **Residual window:** librqbit resumes transfers when the session opens, and the rule's first check runs right after. A finished transfer can announce itself for a moment in between. stash records "finished" to disk at once so this window stays short, and pauses persist, so it only applies to transfers that were seeding when stash stopped.
 
+## Deleting one file
+
+Each row in Files, and the file page, can delete one file of a transfer: stash stops downloading it and removes it from disk at once (the space comes back even while the transfer is running). The last remaining file deletes the whole transfer instead.
+
+- A torrent's data is cut into pieces, and a piece often holds the end of one file and the start of the next. BitTorrent can't forget pieces without checking them, so the next time stash starts, it rechecks that transfer once (its files can't play until the check ends; on a large transfer that takes a few minutes).
+- That check loses the piece the deleted file shared with a kept neighbour. If the seeding rule had stopped the transfer, stash starts it again to fetch that piece, and the rule stops it once it is complete.
+- Because of that shared piece, a small leftover can stay at the deleted file's path. Finder may show it at full size, but it holds about one piece of data. A deleted file that shares no piece is removed completely.
+- If the file has other hard links (for example in a media library), only stash's name is removed; the data stays.
+- Progress is kept in `<STASH_STATE_DIR>/seeding.json`, so a delete interrupted by a crash or restart is finished on the next start.
+
 ## Network status
 
 The rail and the top of Transfers show what torrent peers can see: the interface stash's traffic leaves on, whether it looks like a VPN tunnel, and the public IP and country.
@@ -82,7 +92,8 @@ The rail and the top of Transfers show what torrent peers can see: the interface
 | GET    | `/api/transfers/{id}`                  | One transfer and its files            |
 | POST   | `/api/transfers/{id}/pause` · `/start` | Pause / resume                        |
 | DELETE | `/api/transfers/{id}`                  | Remove the transfer and its files     |
-| GET    | `/api/transfers/{id}/files/{n}`        | Stream (HTTP range); `?download=1` forces a download |
+| GET    | `/api/transfers/{id}/files/{n}`        | Stream (HTTP range); `?download=1` forces a download; `410` for a deleted file |
+| DELETE | `/api/transfers/{id}/files/{n}`        | Delete one file: `{"freed_bytes": n}`; `409` while checking or for the last file |
 | GET    | `/api/network`                         | What peers see (interface, tunnel, public IP); cached 30 s, `?refresh=1` forces a check (at most every 5 s) |
 
 Unknown `/api` paths return a `404` JSON error. Every other `GET` path returns the web UI, so app links such as `/watch/1/0` work when you open them directly.
@@ -90,5 +101,4 @@ Unknown `/api` paths return a `404` JSON error. Every other `GET` path returns t
 ## Not built yet
 
 - ffmpeg remux/transcode for MKV, HEVC and other formats browsers won't play
-- Stop-seeding policy (it currently seeds until paused or deleted)
 - Tauri desktop shell

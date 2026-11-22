@@ -8,17 +8,40 @@ interface Props {
   className?: string;
   /** Why deleting is not possible right now (shown, and the click is refused). */
   pausedReason?: string | undefined;
+  /** The question asked; default "Delete {what} and its files from disk?". */
+  prompt?: string;
+  /** Accessible name for the trigger when its visible label is generic. */
+  ariaLabel?: string;
+  /** Part of the surrounding Up/Down list (TV remotes have no Tab). */
+  rove?: boolean;
 }
 
 /** Two-step delete without a modal: the button turns into an inline
  * confirmation that says exactly what will be removed. */
-export function ConfirmDelete({ what, onConfirm, label = "Delete", className = "", pausedReason }: Props) {
+export function ConfirmDelete({
+  what,
+  onConfirm,
+  label = "Delete",
+  className = "",
+  pausedReason,
+  prompt,
+  ariaLabel,
+  rove = false,
+}: Props) {
+  const roveItem = rove ? { "data-rove-item": "" } : {};
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const wasAsking = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   // Focus moves into the confirmation, and back to Delete when it closes,
   // so keyboard and TV-remote users keep their place.
@@ -35,6 +58,8 @@ export function ConfirmDelete({ what, onConfirm, label = "Delete", className = "
         type="button"
         className={`btn btn--danger ${className}`}
         aria-disabled={pausedReason ? true : undefined}
+        aria-label={ariaLabel}
+        {...roveItem}
         title={pausedReason}
         onClick={() => {
           if (!pausedReason) setAsking(true);
@@ -58,20 +83,38 @@ export function ConfirmDelete({ what, onConfirm, label = "Delete", className = "
         }
       }}
     >
-      <span>{error ?? `Delete ${what} and its files from disk?`}</span>
-      <button ref={cancelRef} type="button" className="btn btn--sm btn--quiet" onClick={() => setAsking(false)}>
+      {error ? (
+        <span role="alert">{error}</span>
+      ) : (
+        <span>{prompt ?? `Delete ${what} and its files from disk?`}</span>
+      )}
+      <button
+        ref={cancelRef}
+        type="button"
+        className="btn btn--sm btn--quiet"
+        onClick={() => setAsking(false)}
+        {...roveItem}
+      >
         Keep
       </button>
       <button
         type="button"
         className="btn btn--sm btn--danger-solid"
         disabled={busy}
+        {...roveItem}
         onClick={async () => {
           setBusy(true);
           setError(null);
           try {
             await onConfirm();
+            // Usually this unmounts; if the row is still here (a poll
+            // failed), don't leave the button stuck on "Deleting…".
+            if (mounted.current) {
+              setBusy(false);
+              setAsking(false);
+            }
           } catch (e) {
+            if (!mounted.current) return;
             setError(e instanceof Error ? e.message : "Delete failed");
             setBusy(false);
           }

@@ -36,7 +36,19 @@ function moveInList(dir: 1 | -1): boolean {
   const list = active?.closest("[data-rove]");
   if (!list || !active) return false;
   const all = items(list, "[data-rove-item]");
-  const i = all.indexOf(active as HTMLElement);
+  // Focus may be on another control in the same row (a delete button, its
+  // confirm): count from that row's item, not from the top of the list.
+  // Nearest enclosing row (inside this list) that holds an item.
+  let own: HTMLElement | null = null;
+  for (let li = active.closest("li"); li && list.contains(li); li = li.parentElement?.closest("li") ?? null) {
+    own = li.querySelector<HTMLElement>("[data-rove-item]");
+    if (own) break;
+  }
+  const i = all.indexOf(active as HTMLElement) >= 0
+    ? all.indexOf(active as HTMLElement)
+    : own
+      ? all.indexOf(own)
+      : -1;
   const next = all[i < 0 ? 0 : Math.min(all.length - 1, Math.max(0, i + dir))];
   next?.focus();
   return Boolean(next);
