@@ -1,7 +1,18 @@
 import { File, FileText, Image, Music, Play } from "lucide-react";
-import { memo, useMemo } from "react";
-import { Link, useSearchParams } from "react-router";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { Link, useLocation, useSearchParams } from "react-router";
+import { ConfirmDelete } from "../components/ConfirmDelete";
+import { useWritesPaused } from "../components/NetworkStatus";
 import { Status } from "../components/Status";
+import { api } from "../lib/api";
 import {
   flatten,
   selectFiles,
@@ -37,10 +48,22 @@ function KindIcon({ kind }: { kind: Kind }) {
   }
 }
 
-const FileRow = memo(function FileRow({ f }: { f: FileEntry }) {
+interface RowProps {
+  f: FileEntry;
+  pausedReason: string | null;
+  /** Stable across renders (see Files), so the memo can ignore it. */
+  onDelete: (f: FileEntry) => Promise<void>;
+}
+
+const FileRow = memo(function FileRow({ f, pausedReason, onDelete }: RowProps) {
   return (
-    <li>
-      <Link className="row" to={`/watch/${f.tid}/${f.fid}`} data-rove-item>
+    <li className="file-item">
+      <Link
+        className="row"
+        to={`/watch/${f.tid}/${f.fid}`}
+        data-rove-item
+        data-key={f.key}
+      >
         <span
           className="frame"
           style={{ "--sw": swatch(f.name) } as React.CSSProperties}
@@ -62,12 +85,29 @@ const FileRow = memo(function FileRow({ f }: { f: FileEntry }) {
           <Status status={f.status} />
         </span>
       </Link>
+      <ConfirmDelete
+        className="btn--quiet btn--sm row-delete"
+        label=""
+        what={f.sole ? `the whole transfer “${f.transferName}”` : `“${f.name}”`}
+        ariaLabel={
+          f.sole ? `Delete transfer “${f.transferName}”` : `Delete “${f.name}”`
+        }
+        prompt={
+          f.sole
+            ? `Delete the whole transfer “${f.transferName}” from disk?`
+            : "Delete this file from disk? stash won't download it again."
+        }
+        pausedReason={pausedReason ?? undefined}
+        onConfirm={() => onDelete(f)}
+      />
     </li>
   );
 }, sameRow);
 
-function sameRow(a: { f: FileEntry }, b: { f: FileEntry }) {
+function sameRow(a: RowProps, b: RowProps) {
   return (
+    a.pausedReason === b.pausedReason &&
+    a.f.sole === b.f.sole &&
     a.f.key === b.f.key &&
     a.f.name === b.f.name &&
     a.f.path === b.f.path &&
@@ -114,6 +154,54 @@ export function Files() {
     () => selectFiles(all, filter, q, sort),
     [all, filter, q, sort],
   );
+
+  const writesPaused = useWritesPaused();
+  // After a delete the row unmounts, so focus would fall to <body> (lost on
+  // a TV). Remember where it should go and move it once the row is gone.
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  const deleting = useRef<{ key: string; next: string | null } | null>(null);
+  const emptyRef = useRef<HTMLHeadingElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const [announce, setAnnounce] = useState("");
+
+  const onDelete = useCallback(async (f: FileEntry) => {
+    const rows = shownRef.current;
+    const i = rows.findIndex((r) => r.key === f.key);
+    const next = rows[i + 1] ?? rows[i - 1] ?? null;
+    deleting.current = { key: f.key, next: next?.key ?? null };
+    try {
+      await transfers.mutate(() =>
+        f.sole ? api.remove(f.tid) : api.removeFile(f.tid, f.fid),
+      );
+      setAnnounce(f.sole ? `Deleted transfer “${f.transferName}”` : `Deleted “${f.name}”`);
+    } catch (e) {
+      deleting.current = null;
+      throw e;
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    const d = deleting.current;
+    if (!d || shown.some((r) => r.key === d.key)) return;
+    deleting.current = null;
+    const target = d.next
+      ? listRef.current?.querySelector<HTMLElement>(`[data-key="${d.next}"]`)
+      : null;
+    (target ?? emptyRef.current ?? listRef.current?.querySelector<HTMLElement>("[data-rove-item]"))?.focus();
+  }, [shown]);
+
+  // Arriving from a delete on the file page: put focus in the list, not on
+  // <body> (where a TV remote can't continue).
+  const location = useLocation();
+  const focusList =
+    (location.state as { focusList?: boolean } | null)?.focusList === true;
+  const focusedOnArrival = useRef(false);
+  useEffect(() => {
+    if (!focusList || loading || focusedOnArrival.current) return;
+    focusedOnArrival.current = true;
+    (listRef.current?.querySelector<HTMLElement>("[data-rove-item]") ?? emptyRef.current)?.focus();
+  }, [focusList, loading]);
 
   const set = (key: string, value: string | null) => {
     const next = new URLSearchParams(params);
@@ -186,7 +274,9 @@ export function Files() {
         <Skeleton />
       ) : all.length === 0 && error ? null : all.length === 0 ? (
         <div className="empty">
-          <h2>Nothing here yet</h2>
+          <h2 ref={emptyRef} tabIndex={-1}>
+            Nothing here yet
+          </h2>
           <p>
             Paste a magnet link in the box above. Files show up here as soon as
             the transfer knows what's inside, and video can play while it
@@ -195,7 +285,9 @@ export function Files() {
         </div>
       ) : shown.length === 0 ? (
         <div className="empty">
-          <h2>No files match</h2>
+          <h2 ref={emptyRef} tabIndex={-1}>
+            No files match
+          </h2>
           <p>
             {q ? `Nothing matches “${q}” in ` : "Nothing in "}
             {filter === "all"
@@ -212,12 +304,20 @@ export function Files() {
           </button>
         </div>
       ) : (
-        <ul className="list" data-rove aria-label="Files">
+        <ul className="list" data-rove aria-label="Files" ref={listRef}>
           {shown.map((f) => (
-            <FileRow key={f.key} f={f} />
+            <FileRow
+              key={f.key}
+              f={f}
+              pausedReason={writesPaused}
+              onDelete={onDelete}
+            />
           ))}
         </ul>
       )}
+      <p className="visually-hidden" aria-live="polite">
+        {announce}
+      </p>
     </div>
   );
 }

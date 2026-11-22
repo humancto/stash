@@ -11,6 +11,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { ConfirmDelete } from "../components/ConfirmDelete";
+import { useWritesPaused } from "../components/NetworkStatus";
 import { useRoom } from "../components/room";
 import { Status, statusText } from "../components/Status";
 import { api, streamPath } from "../lib/api";
@@ -18,9 +19,11 @@ import { copyText, downloadText } from "../lib/clipboard";
 import {
   extension,
   fileStatus,
+  isDeleted,
   isNativelyPlayable,
   isPlayable,
   kindOf,
+  shownFiles,
 } from "../lib/files";
 import { formatBytes } from "../lib/format";
 import { isTypingTarget } from "../lib/keys";
@@ -95,6 +98,7 @@ export function Watch() {
   const [failed, setFailed] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const writesPaused = useWritesPaused();
 
   const t = list.find((x) => x.id === tid);
   const file = Number.isInteger(fid) ? t?.files?.[fid] : undefined;
@@ -177,6 +181,25 @@ export function Watch() {
     );
   }
 
+  if (isDeleted(t, fid)) {
+    // No player or links: the server answers 410 for a deleted file.
+    return (
+      <div className="page">
+        <div className="empty">
+          <h2>This file was deleted</h2>
+          <p>
+            “{name}” was removed from disk and won't be downloaded again. The
+            rest of “{t.name ?? "the transfer"}” is still here.
+          </p>
+          <Link className="btn" to="/files">
+            Back to Files
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  const sole = shownFiles(t).length <= 1;
   const src = streamPath(tid, fid);
   const url = absoluteUrl(src);
   const status = fileStatus(t, fid, file);
@@ -317,12 +340,28 @@ export function Watch() {
           <ArrowDownToLine aria-hidden="true" />
           Go to transfer
         </Link>
+        {!sole && (
+          <ConfirmDelete
+            what={`“${name}”`}
+            label="Delete file"
+            prompt={`Delete “${name}” from disk? stash won't download it again. If it shares data with the next file, a small part can stay on disk.`}
+            pausedReason={writesPaused ?? undefined}
+            onConfirm={async () => {
+              await api.removeFile(tid, fid);
+              // Leave first: the next list would show this page's
+              // "deleted" state for a frame.
+              navigate("/files", { replace: true, state: { focusList: true } });
+              void transfers.refresh();
+            }}
+          />
+        )}
         <ConfirmDelete
           what={`the whole transfer “${t.name ?? name}”`}
           label="Delete transfer"
+          pausedReason={writesPaused ?? undefined}
           onConfirm={async () => {
             await transfers.mutate(() => api.remove(tid));
-            navigate("/files", { replace: true });
+            navigate("/files", { replace: true, state: { focusList: true } });
           }}
         />
       </aside>

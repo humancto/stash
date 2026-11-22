@@ -50,6 +50,25 @@ describe("keyboard navigation", () => {
     expect(active()).toBe("r1");
   });
 
+  it("moves to the next row from another control in a row", () => {
+    document.body.innerHTML = `
+      <ul data-rove>
+        <li><a href="/a" data-rove-item id="f1">A</a><button id="d1">Delete</button></li>
+        <li><a href="/b" data-rove-item id="f2">B</a>
+          <span><button id="keep2">Keep</button><button id="yes2">Delete</button></span></li>
+        <li><a href="/c" data-rove-item id="f3">C</a></li>
+      </ul>`;
+    focus("d1");
+    press("ArrowDown");
+    expect(active()).toBe("f2");
+    focus("keep2");
+    press("ArrowDown");
+    expect(active()).toBe("f3");
+    focus("yes2");
+    press("ArrowUp");
+    expect(active()).toBe("f1");
+  });
+
   it("leaves text fields alone and handles /", () => {
     focus("search");
     expect(press("ArrowDown").defaultPrevented).toBe(false);

@@ -5,7 +5,7 @@ import { ConfirmDelete } from "../components/ConfirmDelete";
 import { NetworkSummary, useWritesPaused } from "../components/NetworkStatus";
 import { Reel } from "../components/Reel";
 import { api, type Transfer } from "../lib/api";
-import { fileStatus } from "../lib/files";
+import { fileStatus, shownFiles } from "../lib/files";
 import {
   formatBytes,
   formatEta,
@@ -39,9 +39,8 @@ function TransferRow({ t }: { t: Transfer }) {
         : paused
           ? "status--paused"
           : "status--streaming";
-  const files = (t.files ?? [])
-    .map((f, fid) => ({ f, fid }))
-    .filter(({ f }) => !f.attributes.padding && !f.attributes.hidden);
+  // Deleted files are gone from the list and the count.
+  const files = shownFiles(t);
 
   const writesPaused = useWritesPaused();
 

@@ -69,6 +69,7 @@ describe("transfer labels", () => {
     infoHash: "aa",
     name: "x",
     files: null,
+    deleted: [],
     stats: {
       state: state as never,
       error: null,
@@ -132,7 +133,7 @@ describe("round trip", () => {
     const tr = (stopsAt: number) =>
       stateLabel(
         {
-          id: 1, infoHash: "a", name: "x", files: null,
+          id: 1, infoHash: "a", name: "x", files: null, deleted: [],
           stats: { state: "live", error: null, progressBytes: 1, totalBytes: 1, finished: true, fileProgress: [], live: null },
           seeding: { keep: false, uploadedBytes: 0, finishedAt: 1, stoppedByRule: false, stopsAt, targetBytes: null },
         },

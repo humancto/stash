@@ -55,6 +55,8 @@ export interface Transfer {
   stats: TorrentStats | null;
   /** Null from an older stash or a malformed value; never drops the transfer. */
   seeding: TransferSeeding | null;
+  /** File ids deleted from this transfer (empty from an older stash). */
+  deleted: number[];
 }
 
 export type SeedingPolicy =
@@ -204,6 +206,9 @@ export function parseTransfer(v: unknown): Transfer | null {
     files,
     stats: parseStats(v["stats"]),
     seeding: parseTransferSeeding(v["seeding"]),
+    deleted: Array.isArray(v["deleted"])
+      ? v["deleted"].map(num).filter((n): n is number => n !== null)
+      : [],
   };
 }
 
@@ -476,6 +481,10 @@ export const api = {
   },
   async remove(id: number): Promise<void> {
     await request(`/api/transfers/${id}`, { method: "DELETE" });
+  },
+  /** Deletes one file: never downloaded again, removed from disk. */
+  async removeFile(id: number, fileId: number): Promise<void> {
+    await request(`/api/transfers/${id}/files/${fileId}`, { method: "DELETE" });
   },
   async settings(signal?: AbortSignal): Promise<Settings> {
     return parseSettings(

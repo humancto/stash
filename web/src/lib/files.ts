@@ -66,14 +66,29 @@ export interface FileEntry {
   length: number;
   kind: Kind;
   status: FileStatus;
+  /** The transfer's only remaining file: deleting it means deleting the
+   * transfer (the server refuses to delete the last file). */
+  sole: boolean;
 }
+
+/** Files a person sees: not padding, not hidden, not deleted. Matches the
+ * server's last-file rule. */
+export function shownFiles(t: Transfer): { f: TorrentFile; fid: number }[] {
+  return (t.files ?? [])
+    .map((f, fid) => ({ f, fid }))
+    .filter(({ f }) => !f.attributes.padding && !f.attributes.hidden && f.included);
+}
+
+/** Excluded files are deleted: stash never adds with a file selection. */
+export const isDeleted = (t: Transfer, fid: number): boolean =>
+  t.deleted.includes(fid) || t.files?.[fid]?.included === false;
 
 /** Every visible file across transfers, newest transfer first. */
 export function flatten(transfers: Transfer[]): FileEntry[] {
   const out: FileEntry[] = [];
   for (const t of [...transfers].sort((a, b) => b.id - a.id)) {
-    (t.files ?? []).forEach((f, fid) => {
-      if (f.attributes.padding || f.attributes.hidden) return;
+    const shown = shownFiles(t);
+    shown.forEach(({ f, fid }) => {
       const name = f.components[f.components.length - 1] ?? f.name;
       out.push({
         key: `${t.id}:${fid}`,
@@ -85,6 +100,7 @@ export function flatten(transfers: Transfer[]): FileEntry[] {
         length: f.length,
         kind: kindOf(name),
         status: fileStatus(t, fid, f),
+        sole: shown.length === 1,
       });
     });
   }

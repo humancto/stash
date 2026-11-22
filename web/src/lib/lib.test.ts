@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseTransfer, parseTransferList, type Transfer } from "./api";
-import { fileStatus, flatten, kindOf, selectFiles, swatch } from "./files";
+import { fileStatus, flatten, isDeleted, kindOf, selectFiles, shownFiles, swatch } from "./files";
 import { formatBytes, formatEta, formatPercent, formatSpeed, percent } from "./format";
 import { averageColor, m3u, vlcUrl } from "./media";
 
@@ -67,12 +67,31 @@ describe("files list", () => {
   const t1 = parseTransfer(raw) as Transfer;
   const t2 = parseTransfer({ ...raw, id: 9, name: "Sintel", files: [{ ...raw.files[1], name: "Sintel.mkv", components: ["Sintel", "Sintel.mkv"] }] }) as Transfer;
   const all = flatten([t1, t2]);
-  it("skips padding, newest transfer first", () => {
-    expect(all.map((f) => f.name)).toEqual(["Sintel.mkv", "Big Buck Bunny.en.srt", "Big Buck Bunny.mp4", "extra.txt"]);
+  it("skips padding and deleted files, newest transfer first", () => {
+    expect(all.map((f) => f.name)).toEqual(["Sintel.mkv", "Big Buck Bunny.en.srt", "Big Buck Bunny.mp4"]);
+  });
+  it("marks a transfer's only remaining file as sole", () => {
+    expect(all.map((f) => f.sole)).toEqual([true, false, false]);
+    // A hidden sibling doesn't count (the server's last-file rule agrees).
+    const hidden = parseTransfer({
+      ...raw,
+      files: [raw.files[1], { ...raw.files[0], attributes: { padding: false, hidden: true } }],
+    }) as Transfer;
+    expect(flatten([hidden]).map((f) => [f.name, f.sole])).toEqual([["Big Buck Bunny.mp4", true]]);
+    expect(shownFiles(hidden)).toHaveLength(1);
+  });
+  it("knows which files were deleted", () => {
+    const t = parseTransfer({ ...raw, deleted: [1, "x", 3] }) as Transfer;
+    expect(t.deleted).toEqual([1, 3]);
+    expect(isDeleted(t, 1)).toBe(true);
+    expect(isDeleted(t, 0)).toBe(false);
+    // excluded counts as deleted even from an older server
+    expect(isDeleted(parseTransfer(raw) as Transfer, 3)).toBe(true);
+    expect((parseTransfer(raw) as Transfer).deleted).toEqual([]);
   });
   it("filters, searches and sorts", () => {
     expect(selectFiles(all, "video", "", "recent").map((f) => f.name)).toEqual(["Sintel.mkv", "Big Buck Bunny.mp4"]);
-    expect(selectFiles(all, "other", "", "recent").map((f) => f.name)).toEqual(["Big Buck Bunny.en.srt", "extra.txt"]);
+    expect(selectFiles(all, "other", "", "recent").map((f) => f.name)).toEqual(["Big Buck Bunny.en.srt"]);
     expect(selectFiles(all, "all", "sintel", "recent")).toHaveLength(1);
     expect(selectFiles(all, "all", "", "size")[0]?.length).toBe(1000);
     expect(selectFiles(all, "all", "", "name")[0]?.name).toBe("Big Buck Bunny.en.srt");

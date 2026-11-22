@@ -1019,6 +1019,38 @@ a {
   text-decoration: none;
   transition: background 140ms var(--ease-out);
 }
+/* A file row: the link plus a trailing delete; its confirm wraps below. */
+.file-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  border-bottom: 1px solid var(--hair);
+}
+.file-item > .row {
+  flex: 1 1 0;
+  min-width: 0;
+  border-bottom: 0;
+}
+.file-item > .row-delete {
+  flex: none;
+  margin-inline-end: 8px;
+  /* Quiet in a list of many: red only when you point at it. */
+  border-color: transparent;
+  color: var(--text-3);
+}
+.file-item:hover > .row-delete {
+  color: var(--text-2);
+}
+.file-item > .row-delete:hover,
+.file-item > .row-delete:focus-visible {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.file-item > .confirm {
+  flex: 1 1 100%;
+  justify-content: flex-end;
+  margin: 0 12px 10px;
+}
 .row:hover,
 .row:focus-visible {
   background: color-mix(in srgb, var(--raised) 80%, transparent);
