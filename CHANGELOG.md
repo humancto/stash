@@ -8,6 +8,8 @@
 - Local peer discovery is off whenever the kill switch is on.
 
 ### Added
+- Delete one file of a transfer from the Files list or the file page (`DELETE /api/transfers/{id}/files/{n}`). The next start rechecks that transfer once.
+- `librqbit` is pinned to `=9.1.0` (file delete relies on its startup behaviour).
 - Seeding rule: stop when finished, until a ratio, for a time, or forever; "Seed" keeps one transfer seeding; upload totals that survive restarts.
 - Privacy page: traffic path, kill switch levels (strict / warn / off), peer IP blocklist (daily list, on by default), listen port status.
 - `STASH_VPN`, `STASH_BLOCKLIST`, `STASH_LISTEN_PORT`, `STASH_UPNP`, `STASH_PEER_LIMIT`.
