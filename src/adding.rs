@@ -31,6 +31,8 @@ pub enum AddError {
     TooLarge,
     Empty,
     BadJson,
+    /// The request body could not be read.
+    BadBody,
     /// Not a magnet, info hash or http(s) URL.
     BadLink,
     NotATorrent,
@@ -56,6 +58,7 @@ impl AddError {
             Self::TooLarge => "That .torrent file is larger than 16 MB.".into(),
             Self::Empty => "Paste a magnet link or a .torrent URL first.".into(),
             Self::BadJson => "The request wasn't valid JSON with a \"url\" field.".into(),
+            Self::BadBody => "stash could not read that request.".into(),
             Self::BadLink => "That isn't a magnet link or a .torrent URL.".into(),
             Self::NotATorrent => "That file isn't a valid .torrent.".into(),
             Self::Download(why) => format!("Could not download that .torrent ({why})."),
@@ -83,16 +86,16 @@ struct UrlBody {
 /// `application/x-bittorrent` are accepted: never a CORS-safelisted type
 /// (text/plain, form, multipart), so other sites can't send this without a
 /// preflight the guard refuses.
-pub fn parse_add(content_type: Option<&str>, body: &[u8]) -> Result<AddSource, AddError> {
+pub fn parse_add(content_type: Option<&str>, body: Bytes) -> Result<AddSource, AddError> {
     match content_type.map(media_type).as_deref() {
         Some("application/json") => {
             if body.len() > URL_MAX_BYTES {
                 return Err(AddError::TooLarge);
             }
-            let req: UrlBody = serde_json::from_slice(body).map_err(|_| AddError::BadJson)?;
+            let req: UrlBody = serde_json::from_slice(&body).map_err(|_| AddError::BadJson)?;
             parse_link(&req.url)
         }
-        Some("application/x-bittorrent") => torrent_bytes(Bytes::copy_from_slice(body)),
+        Some("application/x-bittorrent") => torrent_bytes(body),
         _ => Err(AddError::UnsupportedType),
     }
 }
@@ -193,7 +196,8 @@ fn redirect_step(
         // Indexers answer a .torrent link with a magnet: stop and use it.
         return Ok(false);
     }
-    if hops >= MAX_REDIRECTS {
+    // `hops` counts the original request too.
+    if hops > MAX_REDIRECTS {
         return Err("too many redirects");
     }
     if stay_local && !is_loopback_url(target) {
@@ -277,12 +281,22 @@ pub async fn download(url: &str, via: Option<&str>) -> Result<AddSource, AddErro
         }
         body.extend_from_slice(&chunk);
     }
-    torrent_bytes(Bytes::from(body))
+    // A login page or error page instead of a .torrent: the server's fault.
+    torrent_bytes(Bytes::from(body)).map_err(|e| match e {
+        AddError::NotATorrent | AddError::Empty => {
+            AddError::Download("the server sent something that isn't a .torrent".into())
+        }
+        other => other,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pa(ct: Option<&str>, body: &[u8]) -> Result<AddSource, AddError> {
+        parse_add(ct, Bytes::copy_from_slice(body))
+    }
 
     const HASH: &str = "c9e15763f722f23e98a29decdfae341b98d53056";
 
@@ -335,49 +349,33 @@ mod tests {
     fn content_types() {
         let body = json("magnet:?xt=urn:btih:abc");
         let ok = Ok(AddSource::Magnet("magnet:?xt=urn:btih:abc".into()));
-        assert_eq!(parse_add(Some("application/json"), &body), ok);
-        assert_eq!(
-            parse_add(Some("Application/JSON; charset=utf-8"), &body),
-            ok
-        );
-        assert_eq!(parse_add(None, &body), Err(AddError::UnsupportedType));
+        assert_eq!(pa(Some("application/json"), &body), ok);
+        assert_eq!(pa(Some("Application/JSON; charset=utf-8"), &body), ok);
+        assert_eq!(pa(None, &body), Err(AddError::UnsupportedType));
         for t in [
             "text/plain",
             "application/x-www-form-urlencoded",
             "multipart/form-data",
         ] {
-            assert_eq!(
-                parse_add(Some(t), &body),
-                Err(AddError::UnsupportedType),
-                "{t}"
-            );
+            assert_eq!(pa(Some(t), &body), Err(AddError::UnsupportedType), "{t}");
         }
-        assert_eq!(
-            parse_add(Some("application/json"), b"{"),
-            Err(AddError::BadJson)
-        );
-        assert_eq!(
-            parse_add(Some("application/json"), b"{}"),
-            Err(AddError::BadJson)
-        );
+        assert_eq!(pa(Some("application/json"), b"{"), Err(AddError::BadJson));
+        assert_eq!(pa(Some("application/json"), b"{}"), Err(AddError::BadJson));
         let long = json(&"a".repeat(URL_MAX_BYTES));
-        assert_eq!(
-            parse_add(Some("application/json"), &long),
-            Err(AddError::TooLarge)
-        );
+        assert_eq!(pa(Some("application/json"), &long), Err(AddError::TooLarge));
     }
 
     #[test]
     fn torrent_files() {
         let t = Some("application/x-bittorrent");
         assert_eq!(
-            parse_add(t, b"d4:infod4:name1:aee"),
+            pa(t, b"d4:infod4:name1:aee"),
             Ok(AddSource::File(Bytes::from_static(b"d4:infod4:name1:aee")))
         );
-        assert_eq!(parse_add(t, b""), Err(AddError::Empty));
-        assert_eq!(parse_add(t, b"<html>"), Err(AddError::NotATorrent));
+        assert_eq!(pa(t, b""), Err(AddError::Empty));
+        assert_eq!(pa(t, b"<html>"), Err(AddError::NotATorrent));
         let big = vec![b'd'; TORRENT_MAX_BYTES + 1];
-        assert_eq!(parse_add(t, &big), Err(AddError::TooLarge));
+        assert_eq!(pa(t, &big), Err(AddError::TooLarge));
     }
 
     #[test]
@@ -400,7 +398,11 @@ mod tests {
             redirect_step(&u("https://example.com/b"), 1, false),
             Ok(true)
         );
-        assert!(redirect_step(&u("https://example.com/b"), MAX_REDIRECTS, false).is_err());
+        assert_eq!(
+            redirect_step(&u("https://example.com/b"), MAX_REDIRECTS, false),
+            Ok(true)
+        );
+        assert!(redirect_step(&u("https://example.com/b"), MAX_REDIRECTS + 1, false).is_err());
     }
 
     /// A local indexer answering with a redirect to a magnet link.
@@ -437,6 +439,51 @@ mod tests {
         let err = download(&format!("http://{addr}/away"), Some("utun-test")).await;
         match err {
             Err(AddError::Download(why)) => assert!(why.contains("off this machine"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Serve `app` on a loopback port; returns its base URL.
+    async fn serve(app: axum::Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn download_failures() {
+        use axum::{body::Body, routing::get};
+        let app = axum::Router::new()
+            .route(
+                "/big",
+                // Streamed with no Content-Length, larger than the cap.
+                get(|| async {
+                    use tokio::io::AsyncReadExt;
+                    let reader = tokio::io::repeat(b'd').take(17 << 20);
+                    Body::from_stream(tokio_util::io::ReaderStream::new(reader))
+                }),
+            )
+            .route("/html", get(|| async { "<html>login</html>" }))
+            .route(
+                "/loop",
+                get(|| async { axum::response::Redirect::temporary("/loop") }),
+            );
+        let base = serve(app).await;
+        assert_eq!(
+            download(&format!("{base}/big"), None).await,
+            Err(AddError::TooLarge)
+        );
+        assert_eq!(
+            download(&format!("{base}/missing"), None).await,
+            Err(AddError::Download("HTTP 404".into()))
+        );
+        match download(&format!("{base}/html"), None).await {
+            Err(AddError::Download(why)) => assert!(why.contains("isn't a .torrent"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        match download(&format!("{base}/loop"), None).await {
+            Err(AddError::Download(why)) => assert!(why.contains("too many redirects"), "{why}"),
             other => panic!("{other:?}"),
         }
     }

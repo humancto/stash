@@ -468,7 +468,7 @@ impl From<adding::AddError> for AppError {
 fn body_error(e: BytesRejection) -> adding::AddError {
     match e.status() {
         StatusCode::PAYLOAD_TOO_LARGE => adding::AddError::TooLarge,
-        _ => adding::AddError::Empty,
+        _ => adding::AddError::BadBody,
     }
 }
 
@@ -486,14 +486,12 @@ async fn add(
     let body = body.map_err(body_error)?;
     // Parse (and download) before taking the write guard: bad input is a
     // 400 whatever the VPN state, and a slow download holds nothing.
-    let source = match adding::parse_add(content_type, &body)? {
+    let source = match adding::parse_add(content_type, body)? {
         adding::AddSource::Download(url) => {
             // The download reaches the internet too: never while the kill
-            // switch blocks, and through the tunnel when bound to it.
-            let via = match privacy.binding() {
-                Binding::Blocked => return Err(AppError::NoVpn),
-                Binding::Bound { name, .. } => Some(name),
-                Binding::Unbound => None,
+            // switch has stopped traffic, and through the tunnel when bound.
+            let Some(via) = privacy.download_route() else {
+                return Err(AppError::NoVpn);
             };
             adding::download(&url, via.as_deref()).await?
         }
@@ -507,7 +505,10 @@ async fn add(
             }
             AddTorrent::from_bytes(bytes)
         }
-        adding::AddSource::Download(_) => unreachable!("downloaded above"),
+        // `download` only returns a magnet or a file.
+        adding::AddSource::Download(_) => {
+            return Err(adding::AddError::Download("unexpected link".into()).into());
+        }
     };
     let _writing = privacy.write_guard().await?;
     if !privacy.can_add() {
@@ -860,7 +861,7 @@ mod tests {
         ) -> super::Result<&'static str> {
             let body = body.map_err(super::body_error)?;
             let ct = headers.get("content-type").and_then(|v| v.to_str().ok());
-            crate::adding::parse_add(ct, &body)?;
+            crate::adding::parse_add(ct, body)?;
             Ok("ok")
         }
         let app = Router::new().route("/", post(h.layer(super::DefaultBodyLimit::max(8))));

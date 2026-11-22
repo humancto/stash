@@ -168,3 +168,14 @@ Web
   +/%2B, Add→Cancel arrow), Rust per the rust review list (uppercase
   scheme, charset param, missing type, bare hash, whitespace, 413/415 JSON
   shape). Manual: register + real magnet click in Chrome and Firefox.
+
+## After PR review (rust-expert)
+
+- `.torrent` URL download uses `Privacy::download_route()` (also refused
+  while the kill switch has stopped traffic, before the restart).
+- No early Content-Length check for JSON: the route limit (16 MiB) bounds it
+  and `parse_add` refuses > 8 KiB; stash listens on 127.0.0.1 only.
+- `AddError` is a plain enum with `status()`/`message()` (binary crate, no
+  `Error` impl needed).
+- A download that returns something other than a `.torrent` (login page)
+  is a 502 "the server sent something that isn't a .torrent".
