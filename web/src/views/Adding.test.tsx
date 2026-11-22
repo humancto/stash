@@ -99,10 +99,6 @@ describe("parseMagnet", () => {
     expect(parseMagnet(`magnet:?xt=urn:btmh:1220${"a".repeat(64)}`)?.hash).toBe(
       `1220${"a".repeat(64)}`,
     );
-    // First valid xt wins.
-    expect(parseMagnet(`magnet:?xt=urn:x:1&xt=urn:btih:${HASH}`)?.hash).toBe(
-      HASH,
-    );
   });
 
   it("refuses what isn't a magnet", () => {
@@ -112,6 +108,11 @@ describe("parseMagnet", () => {
       "magnet:?xt=urn:btih:zz",
       `https://x/?xt=urn:btih:${HASH}`,
       "",
+      // Several xt, or an unusual prefix case: the engine could read
+      // something other than what the page shows.
+      `magnet:?xt=urn:x:1&xt=urn:btih:${HASH}`,
+      `magnet:?xt=urn:btih:${HASH}&xt=urn:btih:${"b".repeat(40)}`,
+      `magnet:?xt=URN:BTIH:${HASH}`,
     ])
       expect(parseMagnet(s), s).toBeNull();
   });
@@ -183,7 +184,10 @@ describe("the /add page", () => {
     expect(screen.getByText("Big Buck+Bunny")).toBeInTheDocument();
     expect(screen.getByText(HASH)).toBeInTheDocument();
     const add = screen.getByRole("button", { name: "Add torrent" });
-    expect(document.activeElement).toBe(add);
+    // Focus starts on Cancel, not Add.
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Cancel" }),
+    );
     expect(posts).toEqual([]);
     fireEvent.click(add);
     await act(async () => undefined);
@@ -202,7 +206,7 @@ describe("the /add page", () => {
     );
   });
 
-  it("shows the hash when there is no name, and moves Add → Cancel with Down", async () => {
+  it("shows the hash when there is no name, and moves Cancel → Add with Up", async () => {
     server();
     open(`/add?uri=${encodeURIComponent(`magnet:?xt=urn:btih:${HASH}`)}`);
     expect(await screen.findByText(HASH)).toBeInTheDocument();
@@ -210,13 +214,35 @@ describe("the /add page", () => {
       {},
     ] as unknown as DOMRectList);
     const ev = new KeyboardEvent("keydown", {
-      key: "ArrowDown",
+      key: "ArrowUp",
       cancelable: true,
     });
     handleNavKey(ev, () => undefined);
     expect(document.activeElement).toBe(
-      screen.getByRole("button", { name: "Cancel" }),
+      screen.getByRole("button", { name: "Add torrent" }),
     );
+  });
+
+  it("keeps a raw + in the link as sent by the browser", async () => {
+    const { posts } = server();
+    const raw = `magnet:?xt=urn:btih:${HASH}&dn=a+b`;
+    const router = open(`/add?uri=${raw.replace("?", "%3F").replace(/&/g, "%26")}`);
+    const add = await screen.findByRole("button", { name: "Add torrent" });
+    now += 600;
+    fireEvent.click(add);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/transfers"));
+    // URLSearchParams turns the raw + into a space; that is what is sent and
+    // what librqbit reads as the name too.
+    expect(posts).toEqual([{ type: "application/json", body: { url: raw.replace("a+b", "a b") } }]);
+  });
+
+  it("ignores a held key's auto-repeat on Add", async () => {
+    server();
+    open(`/add?uri=${encodeURIComponent(MAGNET)}`);
+    const add = await screen.findByRole("button", { name: "Add torrent" });
+    now += 600;
+    expect(fireEvent.keyDown(add, { key: "Enter", repeat: true })).toBe(false);
+    expect(fireEvent.keyDown(add, { key: "Enter" })).toBe(true);
   });
 
   it("explains a bad link", async () => {
@@ -323,7 +349,7 @@ describe("paste, drop and Open .torrent", () => {
     await screen.findByRole("heading", { name: "Files" });
     fireEvent.dragOver(window, { dataTransfer: files([]) });
     act(() => {
-      vi.advanceTimersByTime(300);
+      vi.advanceTimersByTime(1100);
     });
     expect(screen.queryByTestId("drop-overlay")).not.toBeInTheDocument();
     fireEvent.drop(window, {
@@ -331,6 +357,34 @@ describe("paste, drop and Open .torrent", () => {
     });
     expect(await screen.findByRole("alert")).toHaveTextContent(/notes\.txt/);
     expect(posts).toEqual([]);
+  });
+
+  it("keeps the browser from opening a dropped file even while paused", async () => {
+    const { posts } = server({ paused: true });
+    open("/files");
+    const add = await screen.findByRole("button", { name: "Add" });
+    await waitFor(() => expect(add).toHaveAttribute("aria-disabled", "true"));
+    expect(fireEvent.dragOver(window, { dataTransfer: files([]) })).toBe(false);
+    expect(fireEvent.drop(window, { dataTransfer: files([torrent()]) })).toBe(false);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/restarting/);
+    expect(posts).toEqual([]);
+  });
+
+  const links = (text: string) => ({
+    types: ["text/uri-list"],
+    files: [],
+    getData: (t: string) => (t === "text/uri-list" ? `# comment\r\n${text}` : ""),
+  });
+
+  it("adds a magnet link dropped from another app, and refuses other links", async () => {
+    const { posts } = server();
+    const router = open("/files");
+    await screen.findByRole("heading", { name: "Files" });
+    fireEvent.drop(window, { dataTransfer: links("https://example.com/page") });
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Only \.torrent files and magnet links/);
+    fireEvent.drop(window, { dataTransfer: links(MAGNET) });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/transfers"));
+    expect(posts).toEqual([{ type: "application/json", body: { url: MAGNET } }]);
   });
 
   it("shows no overlay for drags that start in the page", async () => {

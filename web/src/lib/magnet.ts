@@ -15,15 +15,16 @@ const HEX40 = /^[0-9a-f]{40}$/i;
 const B32 = /^[a-z2-7]{32}$/i;
 const BTMH = /^1220[0-9a-f]{64}$/i;
 
+// Prefixes are matched exactly as librqbit does (lowercase), so what the
+// confirm page shows is what the engine reads.
 function normaliseHash(urn: string): string | null {
-  const lower = urn.toLowerCase();
-  if (lower.startsWith("urn:btih:")) {
+  if (urn.startsWith("urn:btih:")) {
     const h = urn.slice(9);
     if (HEX40.test(h)) return h.toLowerCase();
     if (B32.test(h)) return h.toUpperCase();
     return null;
   }
-  if (lower.startsWith("urn:btmh:")) {
+  if (urn.startsWith("urn:btmh:")) {
     const h = urn.slice(9);
     return BTMH.test(h) ? h.toLowerCase() : null;
   }
@@ -40,11 +41,11 @@ export function parseMagnet(uri: string): MagnetInfo | null {
   } catch {
     return null;
   }
-  let hash: string | null = null;
-  for (const xt of params.getAll("xt")) {
-    hash = normaliseHash(xt);
-    if (hash) break;
-  }
+  // Exactly one xt: with several, the engine might pick a different one
+  // than the page shows.
+  const xts = params.getAll("xt");
+  if (xts.length !== 1) return null;
+  const hash = normaliseHash(xts[0] ?? "");
   if (!hash) return null;
   const dn = params.get("dn")?.trim();
   return { hash, name: dn ? dn : null };

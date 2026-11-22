@@ -1,7 +1,8 @@
 import { ArrowDownToLine, Clapperboard, Plus, Search, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { NavLink, Outlet, useLocation, useNavigate, useSearchParams } from "react-router";
-import { adder, useAdder, type AddSource } from "../lib/adder";
+import { adder, useAdder } from "../lib/adder";
+import { useAddAndGo } from "../lib/useAddAndGo";
 import { handleNavKey, isTypingTarget } from "../lib/keys";
 import { isTorrentFile, isTorrentLink } from "../lib/magnet";
 import { transfers, useTransfers } from "../lib/store";
@@ -31,24 +32,6 @@ function NavLinks({ active }: { active: number }) {
         <span>Privacy</span>
       </NavLink>
     </>
-  );
-}
-
-/** Adds, then shows the result: on a file page (maybe playing) it stays and
- * says so; anywhere else it goes to Transfers. */
-export function useAddAndGo() {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const onWatch = location.pathname.startsWith("/watch/");
-  return useCallback(
-    async (source: AddSource): Promise<boolean> => {
-      const ok = await adder.add(source);
-      if (!ok) return false;
-      if (onWatch) adder.setStatus("Added. It's on Transfers.");
-      else void navigate("/transfers", { state: { added: true } });
-      return true;
-    },
-    [navigate, onWatch],
   );
 }
 
@@ -150,6 +133,10 @@ function DropToAdd() {
     const onDragEnd = () => {
       internal = false;
     };
+    const onBlur = () => {
+      internal = false;
+      hide();
+    };
     const onDragOver = (e: DragEvent) => {
       if (!droppable(e)) return;
       // Always: otherwise the browser opens the dropped file in this tab.
@@ -157,10 +144,16 @@ function DropToAdd() {
       if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
       setOver(true);
       if (timer) clearTimeout(timer);
-      // dragover repeats while over the page; silence means it left.
-      timer = setTimeout(hide, 250);
+      // dragover repeats (every 350 ± 200 ms when still) while over the
+      // page; a long silence means the drag left without a dragleave.
+      timer = setTimeout(hide, 1000);
     };
     const onDrop = (e: DragEvent) => {
+      const wasInternal = internal;
+      // dragend may never reach document (its source was removed): reset
+      // here so a later file drop is never left to the browser.
+      internal = false;
+      if (wasInternal) return;
       if (!droppable(e)) return;
       e.preventDefault();
       hide();
@@ -183,7 +176,7 @@ function DropToAdd() {
     window.addEventListener("dragenter", onDragOver);
     window.addEventListener("dragover", onDragOver);
     window.addEventListener("drop", onDrop);
-    window.addEventListener("blur", hide);
+    window.addEventListener("blur", onBlur);
     return () => {
       if (timer) clearTimeout(timer);
       document.removeEventListener("dragstart", onDragStart);
@@ -191,12 +184,21 @@ function DropToAdd() {
       window.removeEventListener("dragenter", onDragOver);
       window.removeEventListener("dragover", onDragOver);
       window.removeEventListener("drop", onDrop);
-      window.removeEventListener("blur", hide);
+      window.removeEventListener("blur", onBlur);
     };
   }, [addAndGo]);
   if (!over) return null;
   return (
-    <div className="drop-overlay" aria-hidden="true" data-testid="drop-overlay">
+    <div
+      className="drop-overlay"
+      aria-hidden="true"
+      data-testid="drop-overlay"
+      onDragLeave={(e) => {
+        // Left the window (children ignore pointer events, so this only
+        // fires for the overlay itself).
+        if (e.relatedTarget === null) setOver(false);
+      }}
+    >
       <div className="drop-card">
         <ArrowDownToLine />
         <p>Drop to add</p>

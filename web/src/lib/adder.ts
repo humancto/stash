@@ -49,7 +49,10 @@ export function createAdder(deps: AdderDeps) {
     },
     /** Resolves true when everything was added. */
     async add(source: AddSource): Promise<boolean> {
-      if (snapshot.busy) return false;
+      if (snapshot.busy) {
+        set({ error: "Still adding the last one. Try again in a moment." });
+        return false;
+      }
       const paused = deps.paused();
       if (paused) {
         set({ error: paused, status: null });

@@ -1,7 +1,8 @@
 import { ChevronDown, ChevronRight, FileUp, Magnet, Pause, Play } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { Link, useLocation } from "react-router";
-import { useAddAndGo } from "../components/Shell";
+import { Link, useLocation, useNavigate } from "react-router";
+import { useAddAndGo } from "../lib/useAddAndGo";
+import { adder } from "../lib/adder";
 import { ConfirmDelete } from "../components/ConfirmDelete";
 import { NetworkSummary, useWritesPaused } from "../components/NetworkStatus";
 import { Reel } from "../components/Reel";
@@ -162,6 +163,15 @@ function TransferRow({ t }: { t: Transfer }) {
 
 const ASKED_KEY = "stash.magnetHandlerAsked";
 
+function arrivedFromAdd(state: unknown): boolean {
+  return (
+    typeof state === "object" &&
+    state !== null &&
+    "added" in state &&
+    state.added === true
+  );
+}
+
 function readAsked(): boolean {
   try {
     return localStorage.getItem(ASKED_KEY) === "1";
@@ -186,7 +196,7 @@ function AddTools() {
     try {
       navigator.registerProtocolHandler(
         "magnet",
-        `${location.origin}/add?uri=%s`,
+        `${window.location.origin}/add?uri=%s`,
       );
       setAsked(true);
       setRegisterError(null);
@@ -208,7 +218,10 @@ function AddTools() {
         data-rove-item
         aria-disabled={writesPaused ? true : undefined}
         title={writesPaused ?? undefined}
-        onClick={() => fileRef.current?.click()}
+        onClick={() => {
+          if (writesPaused) adder.fail(writesPaused);
+          else fileRef.current?.click();
+        }}
       >
         <FileUp aria-hidden="true" />
         Open .torrent
@@ -252,13 +265,16 @@ function AddTools() {
 export function Transfers() {
   const { transfers: list, loading, error } = useTransfers();
   const location = useLocation();
+  const navigate = useNavigate();
   const headingRef = useRef<HTMLHeadingElement>(null);
-  const added = (location.state as { added?: boolean } | null)?.added === true;
+  const added = arrivedFromAdd(location.state);
   useEffect(() => {
+    if (!added) return;
     // Arrived from an add: put focus on the page, not left on a control
-    // that no longer exists.
-    if (added) headingRef.current?.focus();
-  }, [added, location.key]);
+    // that no longer exists. Then drop the state so a reload doesn't redo it.
+    headingRef.current?.focus();
+    void navigate(location.pathname, { replace: true, state: null });
+  }, [added, location.key, location.pathname, navigate]);
   const sorted = [...list].sort((a, b) => b.id - a.id);
   const active = list.filter(
     (t) => t.stats?.state === "live" && !t.stats.finished,

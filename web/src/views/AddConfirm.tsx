@@ -2,7 +2,7 @@ import { Magnet } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { useWritesPaused } from "../components/NetworkStatus";
-import { useAddAndGo } from "../components/Shell";
+import { useAddAndGo } from "../lib/useAddAndGo";
 import { useAdder } from "../lib/adder";
 import { parseMagnet } from "../lib/magnet";
 
@@ -21,17 +21,22 @@ export function AddConfirm() {
   const { busy, error } = useAdder();
   const writesPaused = useWritesPaused();
   const opened = useRef(0);
-  const addRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const badRef = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
     opened.current = Date.now();
-    addRef.current?.focus();
+    // Focus starts on Cancel: a key already held down (or pressed as the
+    // page opened) must not land on Add.
+    (cancelRef.current ?? badRef.current)?.focus();
   }, [uri]);
 
   if (!info) {
     return (
       <div className="page add-confirm">
-        <h1 className="page-title">That isn't a magnet link</h1>
+        <h1 className="page-title" ref={badRef} tabIndex={-1}>
+          That isn't a magnet link
+        </h1>
         <p className="page-sub">stash can only add magnet links from here.</p>
         <p>
           <Link to="/files" className="btn">
@@ -61,21 +66,24 @@ export function AddConfirm() {
         </p>
         <div className="add-confirm-actions" data-rove>
           <button
-            ref={addRef}
             type="button"
             className="btn btn--primary"
             data-rove-item
-            disabled={busy}
-            aria-disabled={writesPaused ? true : undefined}
+            aria-disabled={busy || writesPaused ? true : undefined}
             title={writesPaused ?? undefined}
+            onKeyDown={(e) => {
+              // Auto-repeat from a held key is not a decision.
+              if (e.repeat && (e.key === "Enter" || e.key === " ")) e.preventDefault();
+            }}
             onClick={() => {
-              if (Date.now() - opened.current < ADD_GUARD_MS) return;
+              if (busy || Date.now() - opened.current < ADD_GUARD_MS) return;
               void addAndGo({ kind: "url", url: uri });
             }}
           >
             {busy ? "Adding…" : "Add torrent"}
           </button>
           <button
+            ref={cancelRef}
             type="button"
             className="btn"
             data-rove-item
