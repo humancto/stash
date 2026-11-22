@@ -1,6 +1,7 @@
 //! stash: a personal put.io-style box.
 //! One binary: torrent engine (librqbit) + HTTP API + web UI.
 
+mod adding;
 mod filedelete;
 mod network;
 mod privacy;
@@ -16,10 +17,11 @@ use std::{
 };
 
 use anyhow::Context;
+use axum::handler::Handler;
 use axum::{
     Json, Router,
-    body::Body,
-    extract::{FromRef, Path, RawQuery, State},
+    body::{Body, Bytes},
+    extract::{DefaultBodyLimit, FromRef, Path, RawQuery, State, rejection::BytesRejection},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware,
     response::{IntoResponse, Response},
@@ -30,7 +32,6 @@ use librqbit::{
     api::{ApiTorrentListOpts, TorrentIdOrHash},
 };
 use privacy::{Binding, Privacy};
-use serde::Deserialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt};
 
 /// librqbit's ApiError already carries a status code and serializes to JSON.
@@ -304,7 +305,10 @@ async fn main() -> anyhow::Result<()> {
 
     web::warn_if_unbuilt::<web::Dist>();
     let api_routes = Router::new()
-        .route("/api/transfers", get(list).post(add))
+        .route(
+            "/api/transfers",
+            get(list).post(add.layer(DefaultBodyLimit::max(adding::TORRENT_MAX_BYTES))),
+        )
         .route("/api/transfers/{id}", get(details).delete(delete))
         .route("/api/transfers/{id}/pause", post(pause))
         .route("/api/transfers/{id}/start", post(start))
@@ -455,17 +459,57 @@ async fn list(
     Json(TransferList { torrents })
 }
 
-#[derive(Deserialize)]
-struct AddRequest {
-    /// Magnet link, or an http(s) URL to a .torrent file.
-    url: String,
+impl From<adding::AddError> for AppError {
+    fn from(e: adding::AddError) -> Self {
+        Self::Message(e.status(), e.message())
+    }
 }
 
+fn body_error(e: BytesRejection) -> adding::AddError {
+    match e.status() {
+        StatusCode::PAYLOAD_TOO_LARGE => adding::AddError::TooLarge,
+        _ => adding::AddError::BadBody,
+    }
+}
+
+/// Add a transfer: JSON `{ "url": … }` (magnet, info hash, or .torrent URL)
+/// or a raw `.torrent` body (`application/x-bittorrent`).
 async fn add(
     State(api): State<Arc<Api>>,
     State(privacy): State<Arc<Privacy>>,
-    Json(req): Json<AddRequest>,
+    headers: HeaderMap,
+    body: std::result::Result<Bytes, BytesRejection>,
 ) -> Result<impl IntoResponse> {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok());
+    let body = body.map_err(body_error)?;
+    // Parse (and download) before taking the write guard: bad input is a
+    // 400 whatever the VPN state, and a slow download holds nothing.
+    let source = match adding::parse_add(content_type, body)? {
+        adding::AddSource::Download(url) => {
+            // The download reaches the internet too: never while the kill
+            // switch has stopped traffic, and through the tunnel when bound.
+            let Some(via) = privacy.download_route() else {
+                return Err(AppError::NoVpn);
+            };
+            adding::download(&url, via.as_deref()).await?
+        }
+        other => other,
+    };
+    let torrent = match source {
+        adding::AddSource::Magnet(m) => AddTorrent::from_url(m),
+        adding::AddSource::File(bytes) => {
+            if librqbit::torrent_from_bytes(&bytes).is_err() {
+                return Err(adding::AddError::NotATorrent.into());
+            }
+            AddTorrent::from_bytes(bytes)
+        }
+        // `download` only returns a magnet or a file.
+        adding::AddSource::Download(_) => {
+            return Err(adding::AddError::Download("unexpected link".into()).into());
+        }
+    };
     let _writing = privacy.write_guard().await?;
     if !privacy.can_add() {
         return Err(AppError::NoVpn);
@@ -474,9 +518,8 @@ async fn add(
         overwrite: true,
         ..Default::default()
     };
-    let added = api
-        .api_add_torrent(AddTorrent::from_url(req.url), Some(opts))
-        .await?;
+    // A torrent stash already has comes back as Ok with its existing id.
+    let added = api.api_add_torrent(torrent, Some(opts)).await?;
     Ok(Json(added))
 }
 
@@ -805,5 +848,45 @@ mod tests {
             content_range(276134447, 276134947, 276134947),
             "bytes 276134447-276134946/276134947"
         );
+    }
+
+    /// Oversized and wrong-type adds answer with the JSON the UI reads.
+    #[tokio::test]
+    async fn add_errors_are_json() {
+        use axum::{Router, body::Body, handler::Handler, http::Request, routing::post};
+        use tower::ServiceExt;
+        async fn h(
+            headers: super::HeaderMap,
+            body: Result<super::Bytes, super::BytesRejection>,
+        ) -> super::Result<&'static str> {
+            let body = body.map_err(super::body_error)?;
+            let ct = headers.get("content-type").and_then(|v| v.to_str().ok());
+            crate::adding::parse_add(ct, body)?;
+            Ok("ok")
+        }
+        let app = Router::new().route("/", post(h.layer(super::DefaultBodyLimit::max(8))));
+        let send = |ct: &str, body: &'static [u8]| {
+            app.clone().oneshot(
+                Request::post("/")
+                    .header("content-type", ct)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+        };
+        for (ct, body, status) in [
+            ("application/x-bittorrent", &b"d123456789"[..], 413),
+            ("text/plain", &b"x"[..], 415),
+        ] {
+            let resp = send(ct, body).await.unwrap();
+            assert_eq!(resp.status().as_u16(), status);
+            let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
+                .await
+                .unwrap();
+            let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert!(
+                v["human_readable"].as_str().is_some_and(|s| !s.is_empty()),
+                "{v}"
+            );
+        }
     }
 }

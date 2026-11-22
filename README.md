@@ -58,6 +58,13 @@ By default stash stops sharing a transfer as soon as it finishes: it pauses it (
 - **Upgrade note:** transfers that were finished and seeding stop seeding a few seconds after you start this version, unless you pick "Keep seeding".
 - **Residual window:** librqbit resumes transfers when the session opens, and the rule's first check runs right after. A finished transfer can announce itself for a moment in between. stash records "finished" to disk at once so this window stays short, and pauses persist, so it only applies to transfers that were seeding when stash stopped.
 
+## Adding
+
+- **Paste** a magnet link, an info hash or a `.torrent` URL in the add box, or anywhere on the page outside a text field. A `.torrent` file copied in Finder can be pasted too. On a file page, stash adds it and keeps playing.
+- **Drop** `.torrent` files, or a magnet link dragged from another app or tab, anywhere on the page. **Open .torrent** on Transfers picks files from disk (up to 16 MB each).
+- **Magnet links in the browser:** on Transfers, "Open magnet links with stash" asks the browser to send `magnet:` links to stash (Chrome, Edge, Firefox; Safari has no such option). Chrome asks with a small icon in the address bar. Clicking a magnet link then opens stash's "Add this torrent?" page; nothing is added until you press Add torrent. The browser remembers this per address, so `localhost:3030` and `127.0.0.1:3030` count separately. Remove it in the browser's settings (Chrome: Settings → Privacy and security → Site settings → Additional permissions → Protocol handlers).
+- `.torrent` URLs are downloaded by stash (30 s, 5 redirects, 16 MB). The download obeys the kill switch: refused while it blocks, and sent through the VPN when torrent traffic uses one. Links to this machine (a local indexer such as Jackett) go direct and may not redirect elsewhere while the VPN is required; a redirect to a magnet link is used as the magnet. Two limits: a local indexer fetches from its trackers over its own connection, so put it behind the VPN too if trackers must not see your IP; and name lookups for the download use the system resolver, as the blocklist download does.
+
 ## Deleting one file
 
 Each row in Files, and the file page, can delete one file of a transfer: stash stops downloading it and removes it from disk at once (the space comes back even while the transfer is running). The last remaining file deletes the whole transfer instead.
@@ -88,7 +95,8 @@ The rail and the top of Transfers show what torrent peers can see: the interface
 | Method | Path                                   | Purpose                               |
 |--------|----------------------------------------|---------------------------------------|
 | GET    | `/api/transfers`                       | List transfers with progress          |
-| POST   | `/api/transfers` `{"url": "magnet:…"}` | Add a magnet link or .torrent URL     |
+| POST   | `/api/transfers` `{"url": "magnet:…"}` | Add a magnet link, info hash or .torrent URL (JSON) |
+| POST   | `/api/transfers` (`application/x-bittorrent`) | Add a `.torrent` file (raw body, up to 16 MB); `413` when larger, `415` for other content types |
 | GET    | `/api/transfers/{id}`                  | One transfer and its files            |
 | POST   | `/api/transfers/{id}/pause` · `/start` | Pause / resume                        |
 | DELETE | `/api/transfers/{id}`                  | Remove the transfer and its files     |

@@ -475,6 +475,14 @@ export const api = {
       body: JSON.stringify({ url }),
     });
   },
+  /** Adds a .torrent file (raw body, up to 16 MB). */
+  async addTorrentFile(file: Blob): Promise<void> {
+    await request("/api/transfers", {
+      method: "POST",
+      headers: { "content-type": "application/x-bittorrent" },
+      body: file,
+    });
+  },
   async pause(id: number): Promise<void> {
     await request(`/api/transfers/${id}/pause`, { method: "POST" });
   },

@@ -50,6 +50,28 @@ describe("keyboard navigation", () => {
     expect(active()).toBe("r1");
   });
 
+  it("continues from a toolbar list into the list below it in the same zone", () => {
+    document.body.innerHTML = `
+      <nav data-zone data-rove><a href="/t" data-rove-item id="r1">Transfers</a></nav>
+      <main data-zone>
+        <div data-rove><button data-rove-item id="t1">Open</button><button data-rove-item id="t2">Magnet</button></div>
+        <ul data-rove><li><button data-rove-item id="l1">Row 1</button></li><li><button data-rove-item id="l2">Row 2</button></li></ul>
+      </main>`;
+    focus("r1");
+    press("ArrowRight");
+    expect(active()).toBe("t1");
+    press("ArrowDown");
+    press("ArrowDown");
+    expect(active()).toBe("l1");
+    press("ArrowDown");
+    expect(active()).toBe("l2");
+    expect(press("ArrowDown").defaultPrevented).toBe(true); // stays, key consumed
+    expect(active()).toBe("l2");
+    focus("l1");
+    press("ArrowUp");
+    expect(active()).toBe("t2");
+  });
+
   it("moves to the next row from another control in a row", () => {
     document.body.innerHTML = `
       <ul data-rove>

@@ -49,7 +49,27 @@ function moveInList(dir: 1 | -1): boolean {
     : own
       ? all.indexOf(own)
       : -1;
-  const next = all[i < 0 ? 0 : Math.min(all.length - 1, Math.max(0, i + dir))];
+  const j = i < 0 ? 0 : i + dir;
+  if (j < 0 || j >= all.length) {
+    // Past the end of this list: continue into the next list in the same
+    // zone (a toolbar above a list, shelves on a page).
+    const zone = list.closest("[data-zone]");
+    if (zone) {
+      const lists = items(zone, "[data-rove]").filter(
+        (l) => l.closest("[data-zone]") === zone && items(l, "[data-rove-item]").length > 0,
+      );
+      const other = lists[lists.indexOf(list as HTMLElement) + dir];
+      if (other) {
+        const its = items(other, "[data-rove-item]");
+        const target = dir === 1 ? its[0] : its[its.length - 1];
+        target?.focus();
+        return Boolean(target);
+      }
+    }
+    // Nowhere to go: keep focus, still consume the key.
+    return all.length > 0;
+  }
+  const next = all[j];
   next?.focus();
   return Boolean(next);
 }
