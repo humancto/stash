@@ -39,7 +39,7 @@ function useAmbientLight(video: HTMLMediaElement | null) {
   const room = useRoom();
 
   // The room keeps the light of the last film it showed (or the booth's
-  // slate default when none has played); only real frames change it.
+  // slate default when none has played); real frames (or a Library title hue) change it.
   useEffect(() => {
     room.setWatching(true);
     return () => room.setWatching(false);
@@ -91,7 +91,7 @@ function useAmbientLight(video: HTMLMediaElement | null) {
 export function backTarget(state: unknown): { path: string; label: string } {
   const fallback = { path: "/files", label: "Files" };
   if (typeof state !== "object" || state === null || !("from" in state)) return fallback;
-  const f = (state as { from: unknown }).from;
+  const f = state.from;
   if (typeof f !== "object" || f === null) return fallback;
   const path = (f as { path?: unknown }).path;
   const label = (f as { label?: unknown }).label;
@@ -105,6 +105,12 @@ export function Watch() {
   const navigate = useNavigate();
   const location = useLocation();
   const from = backTarget(location.state);
+  // After a delete: back to the title or Library that opened this file
+  // (they cope with it being gone), else to Files aimed past the row.
+  const leave = (filesState: object) => {
+    if (from.path !== "/files" && location.key !== "default") navigate(-1);
+    else navigate("/files", { replace: true, state: filesState });
+  };
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tid = Number(params["tid"]);
   const fid = Number(params["fid"]);
@@ -231,7 +237,17 @@ export function Watch() {
   return (
     <div className="watch">
       <div style={{ minWidth: 0 }}>
-        <Link className="back" to={from.path} state={null}>
+        <Link
+          className="back"
+          to={from.path}
+          onClick={(e) => {
+            // Back, not a new entry: keeps history and the poster's focus.
+            if (location.key !== "default") {
+              e.preventDefault();
+              navigate(-1);
+            }
+          }}
+        >
           <ArrowLeft aria-hidden="true" />
           {from.label}
         </Link>
@@ -366,10 +382,7 @@ export function Watch() {
               await api.removeFile(tid, fid);
               // Leave first: the next list would show this page's
               // "deleted" state for a frame. Files aims focus past this row.
-              navigate(from.path, {
-                replace: true,
-                state: { focusList: true, deletedKey: `${tid}:${fid}` },
-              });
+              leave({ focusList: true, deletedKey: `${tid}:${fid}` });
               void transfers.refresh();
             }}
           />
@@ -381,10 +394,7 @@ export function Watch() {
           rove
           onConfirm={async () => {
             await transfers.mutate(() => api.remove(tid));
-            navigate(from.path === "/files" ? "/files" : "/", {
-              replace: true,
-              state: { focusList: true },
-            });
+            leave({ focusList: true });
           }}
         />
       </aside>

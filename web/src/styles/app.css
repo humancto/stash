@@ -1775,9 +1775,9 @@ a {
   overflow-x: auto;
   overscroll-behavior-x: contain;
   scroll-snap-type: x proximity;
-  /* Room for the focus ring and its scale. */
-  padding: 6px 4px 14px;
-  margin: -6px -4px 0;
+  /* Room for the focus ring (2px + 3px offset) and the 1.02 scale. */
+  padding: 8px 8px 14px;
+  margin: -8px -8px 0;
   scrollbar-width: thin;
 }
 .shelf-row > li {
@@ -2120,4 +2120,13 @@ a {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.season-select {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+  color: var(--text-2);
+  font-size: var(--t-sm);
 }

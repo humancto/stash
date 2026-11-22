@@ -1,12 +1,13 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { routes } from "../App";
 import type { Transfer } from "../lib/api";
-import { nextInGrid } from "../lib/keys";
+import { handleNavKey, nextInGrid } from "../lib/keys";
 import {
   createLibraryStore,
+  indexTransfers,
   episodeLabel,
   episodeName,
   librarySignature,
@@ -223,22 +224,26 @@ describe("library helpers", () => {
   });
 
   it("plays the best ready version, else the furthest download, and the first playable episode", async () => {
-    const list = await parsedTransfers();
+    const list = indexTransfers(await parsedTransfers());
     // 1080p is ready; 2160p is only 40% there.
     expect(playChoice(list, T("film-blade-runner-2049-2017"))).toEqual({
       file: T("film-blade-runner-2049-2017").files[0],
       streaming: false,
     });
-    // Only S01E02 has data.
+    // Nothing ready yet: the first episode, streaming as it arrives.
     const show = playChoice(list, T("show-severance"));
     expect(show?.file.episodes).toEqual([1]);
     expect(show?.streaming).toBe(true);
+    // An active download wins, noting that another version can play.
     expect(titleState(list, T("film-blade-runner-2049-2017"))).toEqual({
-      kind: "ready",
+      kind: "streaming",
+      pct: 40,
+      someReady: true,
     });
     expect(titleState(list, T("show-severance"))).toEqual({
       kind: "streaming",
       pct: 30,
+      someReady: false,
     });
   });
 
@@ -429,3 +434,89 @@ describe("Title page", () => {
     await act(async () => undefined);
   });
 });
+
+describe("remote and history", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const press = (key: string) => {
+    const e = new KeyboardEvent("keydown", { key, cancelable: true });
+    handleNavKey(e, () => undefined);
+    return e;
+  };
+  const visibleInJsdom = () =>
+    vi
+      .spyOn(HTMLElement.prototype, "getClientRects")
+      .mockReturnValue([{}] as unknown as DOMRectList);
+
+  it("reaches the toolbar, the spotlight and the posters from the rail", async () => {
+    server();
+    open("/");
+    await screen.findByRole("heading", { name: "Blade Runner 2049" });
+    visibleInJsdom();
+    within(screen.getByRole("navigation", { name: "Main" }))
+      .getByRole("link", { name: "Library" })
+      .focus();
+    press("ArrowRight");
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "All" }));
+    press("ArrowDown");
+    expect(document.activeElement).toBe(screen.getByRole("link", { name: /^Play/ }));
+    press("ArrowDown");
+    expect(document.activeElement?.getAttribute("data-key")).toBe("film-blade-runner-2049-2017");
+    expect(document.activeElement?.closest("#shelf-downloading, section")?.getAttribute("aria-labelledby")).toBe(
+      "shelf-downloading",
+    );
+  });
+
+  it("focuses Play on a title page, and Back lands on the poster that opened it", async () => {
+    server();
+    const router = open("/");
+    const poster = (await screen.findAllByRole("link", { name: /^Severance, show/ }))[0]!;
+    await userEvent.click(poster);
+    await screen.findByRole("heading", { name: "Severance", level: 1 });
+    expect(document.activeElement).toBe(screen.getByRole("link", { name: "Play S01E01" }));
+    await userEvent.click(document.querySelector<HTMLElement>(".title-page .back")!);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    await waitFor(() =>
+      expect(document.activeElement?.getAttribute("data-key")).toBe("show-severance"),
+    );
+  });
+
+  it("Back from the player returns to the title without a new history entry", async () => {
+    server();
+    const router = open("/title/show-severance");
+    await userEvent.click(await screen.findByRole("link", { name: "Play S01E01" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/watch/2/0"));
+    await userEvent.click(await screen.findByRole("link", { name: "Severance" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/title/show-severance"));
+    expect(router.state.historyAction).toBe("POP");
+    // The played episode's row has focus again.
+    await waitFor(() => expect(document.activeElement?.getAttribute("data-key")).toBe("2:0"));
+  });
+
+  it("keeps the season in the URL", async () => {
+    server();
+    const router = open("/title/show-severance?season=2");
+    expect(await screen.findByRole("heading", { name: "Season 2" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Season 1" }));
+    expect(router.state.location.search).toBe("?season=1");
+  });
+
+  it("ignores unknown filter values", async () => {
+    server();
+    open("/?type=posters&state=nope&sort=x");
+    expect(await screen.findByRole("heading", { name: "All titles" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("puts a show with one season ready and one downloading on the Downloading shelf", async () => {
+    server();
+    open("/?state=ready");
+    // Blade Runner: one version ready, one downloading → counts as ready.
+    expect(await screen.findByRole("heading", { name: "1 title" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^Blade Runner 2049, 2017, film, downloading 40%/ })).toBeInTheDocument();
+  });
+});
+

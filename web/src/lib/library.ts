@@ -3,7 +3,7 @@
 // come from the shared transfers poll, joined here, so there is one source
 // of truth for "how far along is it".
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { ApiError, api, type Transfer } from "./api";
 import { fileStatus, type FileStatus } from "./files";
 import { useTransfers } from "./store";
@@ -205,18 +205,20 @@ export function useLibrary(store: LibraryStore = library) {
   useEffect(() => {
     if (sig !== null) store.sync(sig);
   }, [sig, store]);
-  const snap = useSyncExternalStore(
-    store.subscribe,
-    store.getSnapshot,
-    store.getSnapshot,
-  );
-  return { ...snap, transfers };
+  const snap = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+  const byId = useMemo(() => indexTransfers(transfers), [transfers]);
+  return { ...snap, byId };
 }
 
 // ---- joining with transfers ------------------------------------------
 
-export function statusOf(list: Transfer[], f: TitleFile): FileStatus {
-  const t = list.find((x) => x.id === f.tid);
+/** Transfers by id, built once per poll snapshot. */
+export type TransferIndex = ReadonlyMap<number, Transfer>;
+export const indexTransfers = (list: readonly Transfer[]): TransferIndex =>
+  new Map(list.map((t) => [t.id, t]));
+
+export function statusOf(byId: TransferIndex, f: TitleFile): FileStatus {
+  const t = byId.get(f.tid);
   const file = t?.files?.[f.fid];
   if (!t || !file) return { kind: "checking" };
   return fileStatus(t, f.fid, file);
@@ -224,19 +226,23 @@ export function statusOf(list: Transfer[], f: TitleFile): FileStatus {
 
 export type TitleState =
   | { kind: "ready" }
-  | { kind: "streaming"; pct: number }
+  /** Something is downloading; `someReady` when other files can play. */
+  | { kind: "streaming"; pct: number; someReady: boolean }
   | { kind: "paused"; pct: number }
   | { kind: "checking" }
   | { kind: "error"; message: string };
 
-/** One state for a title: ready if any file is, else the furthest along. */
-export function titleState(list: Transfer[], t: Title): TitleState {
-  const all = t.files.map((f) => statusOf(list, f));
-  if (all.some((s) => s.kind === "ready")) return { kind: "ready" };
+/** One state for a title. An active download wins (a show with season 1 on
+ * disk and season 2 arriving is "downloading"); then ready if any file is;
+ * then paused, error, checking. */
+export function titleState(byId: TransferIndex, t: Title): TitleState {
+  const all = t.files.map((f) => statusOf(byId, f));
+  const ready = all.some((s) => s.kind === "ready");
   const pct = (k: "streaming" | "paused") =>
     Math.max(...all.map((s) => (s.kind === k ? s.pct : -1)));
   if (all.some((s) => s.kind === "streaming"))
-    return { kind: "streaming", pct: pct("streaming") };
+    return { kind: "streaming", pct: pct("streaming"), someReady: ready };
+  if (ready) return { kind: "ready" };
   if (all.some((s) => s.kind === "paused"))
     return { kind: "paused", pct: pct("paused") };
   const err = all.find((s) => s.kind === "error");
@@ -244,6 +250,11 @@ export function titleState(list: Transfer[], t: Title): TitleState {
     return { kind: "error", message: err.message };
   return { kind: "checking" };
 }
+
+export const canPlaySome = (s: TitleState) =>
+  s.kind === "ready" || (s.kind === "streaming" && s.someReady);
+export const isDownloading = (s: TitleState) =>
+  s.kind === "streaming" || s.kind === "paused";
 
 const RES_RANK: Record<string, number> = {
   "2160p": 6,
@@ -265,8 +276,8 @@ export interface PlayChoice {
 /** What Play starts: the best-quality ready file, else the most complete
  * downloading one (stash streams while downloading). For shows, the first
  * episode in order that can play. */
-export function playChoice(list: Transfer[], t: Title): PlayChoice | null {
-  const withStatus = t.files.map((f) => ({ f, s: statusOf(list, f) }));
+export function playChoice(byId: TransferIndex, t: Title): PlayChoice | null {
+  const withStatus = t.files.map((f) => ({ f, s: statusOf(byId, f) }));
   if (t.kind === "show") {
     // Files arrive sorted by season/episode: the first ready episode, else
     // the first that is downloading (it streams as it arrives).

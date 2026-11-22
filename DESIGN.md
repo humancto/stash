@@ -336,7 +336,8 @@ The home page (`/`) and the title page (`/title/:key`). The owner asked for a po
 - **Spotlight:** the newest playable title as a wide band lit in its hue, the title at up to 3.75rem/600, meta and mono quality badges, then Play (the page's amber button) and Details. It also sets `--screen` to the title hue, so the room takes the title's light.
 - **Shelves and grid:** Downloading and (when it is a subset) Recently added are one-row horizontal shelves; All titles is a grid of 6 columns (5 ≤1400px, 4 ≤1023px, 3 on phones, 7 on the TV). Type and state filters are two segmented groups; sort is a select.
 - **Title page:** a hero band in the title hue with the typographic poster, the title at up to 3rem/600, meta, quality badges, Play and "Hide from Library" (quiet). Shows get a season segmented group and ruled episode rows (S01E02 · episode name · size · status); films list their versions.
-- **Motion and focus:** posters lift 2px and scale 1.02 on hover and focus (none under reduced motion); focus is the amber outline at 3px offset. Arrow keys move through grids by position.
+- **Motion and focus:** posters rise 2px and scale 1.02 on hover and focus, with no shadow (The Light Not Lift Rule still holds; none of it under reduced motion); focus is the amber outline at 3px offset. Arrow keys move through grids by position.
+- **Room light:** the spotlight and the title page set `--screen` to the title hue, the same way a playing film sets it from its frames; the Watch page's sampled light replaces it once playback starts.
 - **Badge:** mono 0.6875rem, 0.03em tracking, 1px 24% print border, 6px radius. Data, not decoration.
 
 ## Do's and Don'ts

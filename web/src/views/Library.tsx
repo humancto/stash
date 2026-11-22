@@ -1,10 +1,12 @@
 import { Play } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { Link, useNavigationType, useSearchParams } from "react-router";
 import { Poster } from "../components/Poster";
 import { useRoom } from "../components/room";
-import type { Transfer } from "../lib/api";
+import { api } from "../lib/api";
 import {
+  canPlaySome,
+  isDownloading,
   languageName,
   library,
   playChoice,
@@ -15,8 +17,8 @@ import {
   useLibrary,
   type Title,
   type TitleState,
+  type TransferIndex,
 } from "../lib/library";
-import { api } from "../lib/api";
 
 /** The poster last opened, so Back lands on it again. */
 let lastPoster: string | null = null;
@@ -24,20 +26,33 @@ export const rememberPoster = (key: string) => {
   lastPoster = key;
 };
 
-type TypeFilter = "all" | "films" | "shows";
-type StateFilter = "all" | "ready" | "downloading";
-type SortBy = "recent" | "title" | "year";
-
-const TYPES: { id: TypeFilter; label: string }[] = [
+const TYPES = [
   { id: "all", label: "All" },
   { id: "films", label: "Films" },
   { id: "shows", label: "Shows" },
-];
-const STATES: { id: StateFilter; label: string }[] = [
+] as const;
+const STATES = [
   { id: "all", label: "Any" },
   { id: "ready", label: "Ready" },
   { id: "downloading", label: "Downloading" },
-];
+] as const;
+const SORTS = [
+  { id: "recent", label: "Recently added" },
+  { id: "title", label: "Title" },
+  { id: "year", label: "Year" },
+] as const;
+
+/** A URL parameter narrowed to one of `options`, else the first. */
+function pick<T extends string>(
+  options: readonly { id: T }[],
+  v: string | null,
+): T {
+  return options.find((o) => o.id === v)?.id ?? options[0]!.id;
+}
+
+/** Accent- and case-insensitive text for search. */
+const fold = (s: string) =>
+  s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
 function detailOf(t: Title): string {
   if (t.kind === "show") {
@@ -49,26 +64,36 @@ function detailOf(t: Title): string {
   return best === "2160p" ? "4K" : (best ?? "");
 }
 
-const posterState = (s: TitleState) => ({
-  state: s.kind,
-  pct: s.kind === "streaming" || s.kind === "paused" ? Math.floor(s.pct) : 0,
-});
-
-function TitlePoster({ t, list }: { t: Title; list: Transfer[] }) {
-  const { state, pct } = posterState(titleState(list, t));
-  return (
-    <Poster
-      titleKey={t.key}
-      title={t.title}
-      year={t.year}
-      kind={t.kind}
-      detail={detailOf(t)}
-      color={titleColor(t)}
-      state={state}
-      pct={pct}
-    />
-  );
+function sameState(a: TitleState, b: TitleState): boolean {
+  if (a.kind !== b.kind) return false;
+  if (
+    (a.kind === "streaming" || a.kind === "paused") &&
+    (b.kind === "streaming" || b.kind === "paused")
+  )
+    return Math.floor(a.pct) === Math.floor(b.pct);
+  return true;
 }
+
+/** Re-renders only when the title or its rounded state changes. */
+const TitlePoster = memo(
+  function TitlePoster({ t, s }: { t: Title; s: TitleState }) {
+    return (
+      <Poster
+        titleKey={t.key}
+        title={t.title}
+        year={t.year}
+        kind={t.kind}
+        detail={detailOf(t)}
+        color={titleColor(t)}
+        state={s.kind}
+        pct={
+          s.kind === "streaming" || s.kind === "paused" ? Math.floor(s.pct) : 0
+        }
+      />
+    );
+  },
+  (a, b) => a.t === b.t && sameState(a.s, b.s),
+);
 
 function Shelf({
   id,
@@ -91,15 +116,15 @@ function Shelf({
   );
 }
 
-/** The newest title that can play, given the room's light. */
-function Spotlight({ t, list }: { t: Title; list: Transfer[] }) {
+/** The newest title that can play, lighting the room in its hue. */
+function Spotlight({ t, byId }: { t: Title; byId: TransferIndex }) {
   const room = useRoom();
   const color = titleColor(t);
   useEffect(() => {
     room.setScreen(color);
   }, [room, color]);
-  const play = playChoice(list, t);
-  const q = t.files[0]?.quality;
+  const play = playChoice(byId, t);
+  const q = (play?.file ?? t.files[0])?.quality;
   const badges = q ? qualityBadges(q) : [];
   const langs =
     q?.languages.filter((l) => l !== "multi").map(languageName) ?? [];
@@ -127,7 +152,7 @@ function Spotlight({ t, list }: { t: Title; list: Transfer[] }) {
             </span>
           )}
         </p>
-        <div className="spotlight-actions" data-rove>
+        <div className="spotlight-actions" data-rove="grid">
           {play && (
             <Link
               className="btn btn--primary"
@@ -153,15 +178,46 @@ function Spotlight({ t, list }: { t: Title; list: Transfer[] }) {
   );
 }
 
+function TabGroup<T extends string>({
+  label,
+  options,
+  value,
+  onPick,
+}: {
+  label: string;
+  options: readonly { id: T; label: string }[];
+  value: T;
+  onPick: (v: T) => void;
+}) {
+  return (
+    <div className="tabs" role="group" aria-label={label}>
+      {options.map((x) => (
+        <button
+          key={x.id}
+          type="button"
+          className="tab"
+          data-rove-item
+          aria-pressed={value === x.id}
+          onClick={() => onPick(x.id)}
+        >
+          {x.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function Library() {
-  const { library: lib, loading, error, transfers: list } = useLibrary();
+  const { library: lib, loading, error, byId } = useLibrary();
   const [params, setParams] = useSearchParams();
   const navType = useNavigationType();
   const [showHidden, setShowHidden] = useState(false);
-  const q = (params.get("q") ?? "").trim().toLowerCase();
-  const type = (params.get("type") as TypeFilter | null) ?? "all";
-  const stateF = (params.get("state") as StateFilter | null) ?? "all";
-  const sort = (params.get("sort") as SortBy | null) ?? "recent";
+  const [unhideError, setUnhideError] = useState<string | null>(null);
+  const rawQ = (params.get("q") ?? "").trim();
+  const q = fold(rawQ);
+  const type = pick(TYPES, params.get("type"));
+  const stateF = pick(STATES, params.get("state"));
+  const sort = pick(SORTS, params.get("sort"));
 
   const set = (key: string, value: string | null) => {
     const next = new URLSearchParams(params);
@@ -174,24 +230,21 @@ export function Library() {
   const visible = useMemo(() => titles.filter((t) => !t.hidden), [titles]);
   const hidden = useMemo(() => titles.filter((t) => t.hidden), [titles]);
   const states = useMemo(
-    () => new Map(titles.map((t) => [t.key, titleState(list, t)])),
-    [titles, list],
+    () => new Map(titles.map((t) => [t.key, titleState(byId, t)])),
+    [titles, byId],
   );
-  const downloading = (t: Title) => {
-    const k = states.get(t.key)?.kind;
-    return k === "streaming" || k === "paused";
-  };
+  const stateOf = (t: Title): TitleState =>
+    states.get(t.key) ?? { kind: "checking" };
 
   const filtering = q !== "" || type !== "all" || stateF !== "all";
   const shown = useMemo(() => {
     const picked = visible.filter((t) => {
       if (type === "films" && t.kind !== "film") return false;
       if (type === "shows" && t.kind !== "show") return false;
-      const k = states.get(t.key)?.kind;
-      if (stateF === "ready" && k !== "ready") return false;
-      if (stateF === "downloading" && k !== "streaming" && k !== "paused")
-        return false;
-      return !q || t.title.toLowerCase().includes(q);
+      const s = states.get(t.key);
+      if (stateF === "ready" && !(s && canPlaySome(s))) return false;
+      if (stateF === "downloading" && !(s && isDownloading(s))) return false;
+      return !q || fold(`${t.title} ${t.year ?? ""}`).includes(q);
     });
     if (sort === "title")
       picked.sort((a, b) =>
@@ -202,19 +255,20 @@ export function Library() {
   }, [visible, type, stateF, q, sort, states]);
 
   const spotlight = useMemo(
-    () => visible.find((t) => playChoice(list, t) !== null) ?? null,
-    [visible, list],
+    () => visible.find((t) => playChoice(byId, t) !== null) ?? null,
+    [visible, byId],
   );
-  const inProgress = visible.filter(downloading);
+  const inProgress = visible.filter((t) => isDownloading(stateOf(t)));
+  const pending = lib?.pending ?? [];
   // This week's additions, when that's a subset worth its own shelf.
   const weekAgo = Date.now() / 1000 - 7 * 24 * 3600;
   const recentAll = visible.filter((t) => t.added >= weekAgo);
-  const recent = recentAll.length < visible.length ? recentAll.slice(0, 12) : [];
-  const pending = lib?.pending ?? [];
+  const recent =
+    recentAll.length < visible.length ? recentAll.slice(0, 12) : [];
 
   // Back from a title page: focus the poster that was opened.
   useEffect(() => {
-    if (navType !== "POP" || !lastPoster || loading) return;
+    if (navType !== "POP" || !lastPoster || !lib) return;
     const el = document.querySelector<HTMLElement>(
       `.library [data-key="${CSS.escape(lastPoster)}"]`,
     );
@@ -222,30 +276,55 @@ export function Library() {
       el.focus();
       el.scrollIntoView?.({ block: "nearest", inline: "nearest" });
     }
-  }, [navType, loading]);
+  }, [navType, lib]);
 
   const onPick = (e: React.MouseEvent) => {
-    const key = (e.target as HTMLElement).closest<HTMLElement>("[data-key]")
-      ?.dataset["key"];
+    if (!(e.target instanceof Element)) return;
+    const key = e.target.closest<HTMLElement>("[data-key]")?.dataset["key"];
     if (key) rememberPoster(key);
   };
+
+  async function unhide(key: string) {
+    setUnhideError(null);
+    try {
+      await api.unhideTitle(key);
+      await library.refresh();
+    } catch (e) {
+      setUnhideError(
+        e instanceof Error ? e.message : "Could not show it again.",
+      );
+    }
+  }
 
   if (loading && !lib) {
     return (
       <div className="page library" aria-busy="true">
         <div className="spotlight skeleton" />
-        <ul className="poster-grid skeleton" aria-hidden="true">
-          {Array.from({ length: 10 }, (_, i) => (
-            <li key={i}>
-              <span className="poster frame" />
-            </li>
-          ))}
-        </ul>
       </div>
     );
   }
 
+  if (error && !lib) {
+    return (
+      <div className="page library">
+        <div className="empty" role="alert">
+          <h2>Can't load the Library</h2>
+          <p>{error}. It will try again when transfers change.</p>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => void library.refresh()}
+          >
+            Retry now
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Nothing visible to show; hidden titles still get their way back below.
   const nothing = visible.length === 0 && pending.length === 0;
+  const others = lib?.otherFiles ?? 0;
 
   return (
     <div className="page library" onClickCapture={onPick}>
@@ -267,33 +346,19 @@ export function Library() {
           )}
         </div>
         {!nothing && (
-          <div className="toolbar">
-            <div className="tabs" role="group" aria-label="Show">
-              {TYPES.map((x) => (
-                <button
-                  key={x.id}
-                  type="button"
-                  className="tab"
-                  aria-pressed={type === x.id}
-                  onClick={() => set("type", x.id === "all" ? null : x.id)}
-                >
-                  {x.label}
-                </button>
-              ))}
-            </div>
-            <div className="tabs" role="group" aria-label="State">
-              {STATES.map((x) => (
-                <button
-                  key={x.id}
-                  type="button"
-                  className="tab"
-                  aria-pressed={stateF === x.id}
-                  onClick={() => set("state", x.id === "all" ? null : x.id)}
-                >
-                  {x.label}
-                </button>
-              ))}
-            </div>
+          <div className="toolbar" data-rove="grid">
+            <TabGroup
+              label="Show"
+              options={TYPES}
+              value={type}
+              onPick={(v) => set("type", v === "all" ? null : v)}
+            />
+            <TabGroup
+              label="State"
+              options={STATES}
+              value={stateF}
+              onPick={(v) => set("state", v === "all" ? null : v)}
+            />
             <label className="visually-hidden" htmlFor="library-sort">
               Sort
             </label>
@@ -305,9 +370,11 @@ export function Library() {
                 set("sort", e.target.value === "recent" ? null : e.target.value)
               }
             >
-              <option value="recent">Recently added</option>
-              <option value="title">Title</option>
-              <option value="year">Year</option>
+              {SORTS.map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.label}
+                </option>
+              ))}
             </select>
           </div>
         )}
@@ -315,7 +382,7 @@ export function Library() {
 
       {error && (
         <div className="banner" role="alert">
-          <span>Can't load the Library: {error}.</span>
+          <span>Can't refresh the Library: {error}. Showing the last one.</span>
           <button
             type="button"
             className="btn btn--sm"
@@ -328,14 +395,17 @@ export function Library() {
 
       {nothing ? (
         <div className="empty">
-          {lib && lib.otherFiles > 0 ? (
+          {hidden.length > 0 ? (
+            <>
+              <h2>Everything is hidden</h2>
+              <p>Show hidden titles again below.</p>
+            </>
+          ) : others > 0 ? (
             <>
               <h2>No films or shows yet</h2>
               <p>
-                stash found {lib.otherFiles}{" "}
-                {lib.otherFiles === 1 ? "video" : "videos"} that
-                {lib.otherFiles === 1 ? " isn't" : " aren't"} a film or an
-                episode.
+                stash found {others} {others === 1 ? "video" : "videos"} that{" "}
+                {others === 1 ? "isn't" : "aren't"} a film or an episode.
               </p>
               <Link className="btn" to="/files">
                 See Files
@@ -354,32 +424,35 @@ export function Library() {
         </div>
       ) : (
         <>
-          {!filtering && spotlight && <Spotlight t={spotlight} list={list} />}
+          {!filtering && spotlight && <Spotlight t={spotlight} byId={byId} />}
 
           {!filtering && (inProgress.length > 0 || pending.length > 0) && (
             <Shelf id="shelf-downloading" heading="Downloading">
               {inProgress.map((t) => (
                 <li key={t.key}>
-                  <TitlePoster t={t} list={list} />
+                  <TitlePoster t={t} s={stateOf(t)} />
                 </li>
               ))}
-              {pending.map((tid) => (
-                <li key={`p${tid}`}>
-                  <Link
-                    to="/transfers"
-                    className="poster poster--pending"
-                    data-rove-item
-                    aria-label={`${nameOf(list, tid)}, fetching details`}
-                  >
-                    <span className="poster-art" aria-hidden="true">
-                      <span className="poster-title poster-title--s">
-                        {nameOf(list, tid)}
+              {pending.map((tid) => {
+                const name = byId.get(tid)?.name ?? "New transfer";
+                return (
+                  <li key={`p${tid}`}>
+                    <Link
+                      to="/transfers"
+                      className="poster poster--pending"
+                      data-rove-item
+                      aria-label={`${name}, fetching details`}
+                    >
+                      <span className="poster-art" aria-hidden="true">
+                        <span className="poster-title poster-title--s">
+                          {name}
+                        </span>
+                        <span className="poster-foot">Fetching details…</span>
                       </span>
-                      <span className="poster-foot">Fetching details…</span>
-                    </span>
-                  </Link>
-                </li>
-              ))}
+                    </Link>
+                  </li>
+                );
+              })}
             </Shelf>
           )}
 
@@ -387,7 +460,7 @@ export function Library() {
             <Shelf id="shelf-recent" heading="Recently added">
               {recent.map((t) => (
                 <li key={t.key}>
-                  <TitlePoster t={t} list={list} />
+                  <TitlePoster t={t} s={stateOf(t)} />
                 </li>
               ))}
             </Shelf>
@@ -402,8 +475,8 @@ export function Library() {
             {shown.length === 0 ? (
               <p className="shelf-empty">
                 Nothing matches.{" "}
-                {q && (
-                  <Link to={`/files?q=${encodeURIComponent(q)}`}>
+                {rawQ && (
+                  <Link to={`/files?q=${encodeURIComponent(rawQ)}`}>
                     Search files instead
                   </Link>
                 )}
@@ -412,15 +485,15 @@ export function Library() {
               <ul className="poster-grid" data-rove="grid">
                 {shown.map((t) => (
                   <li key={t.key}>
-                    <TitlePoster t={t} list={list} />
+                    <TitlePoster t={t} s={stateOf(t)} />
                   </li>
                 ))}
               </ul>
             )}
-            {q && shown.length > 0 && (
+            {rawQ && shown.length > 0 && (
               <p className="shelf-more">
-                <Link to={`/files?q=${encodeURIComponent(q)}`}>
-                  Search files for “{q}” →
+                <Link to={`/files?q=${encodeURIComponent(rawQ)}`}>
+                  Search files for “{rawQ}” →
                 </Link>
               </p>
             )}
@@ -428,7 +501,7 @@ export function Library() {
         </>
       )}
 
-      {(hidden.length > 0 || (lib?.otherFiles ?? 0) > 0) && !nothing && (
+      {(hidden.length > 0 || (others > 0 && !nothing)) && (
         <footer className="library-foot">
           {hidden.length > 0 && (
             <button
@@ -440,13 +513,17 @@ export function Library() {
               Hidden ({hidden.length})
             </button>
           )}
-          {(lib?.otherFiles ?? 0) > 0 && (
+          {others > 0 && !nothing && (
             <Link className="btn btn--quiet btn--sm" to="/files">
-              {lib?.otherFiles} other{" "}
-              {lib?.otherFiles === 1 ? "video" : "videos"} in Files
+              {others} other {others === 1 ? "video" : "videos"} in Files
             </Link>
           )}
         </footer>
+      )}
+      {unhideError && (
+        <p className="add-error" role="alert">
+          {unhideError}
+        </p>
       )}
       {showHidden && hidden.length > 0 && (
         <ul className="hidden-list" aria-label="Hidden titles" data-rove>
@@ -470,14 +547,4 @@ export function Library() {
       )}
     </div>
   );
-}
-
-function nameOf(list: Transfer[], tid: number): string {
-  const t = list.find((x) => x.id === tid);
-  return t?.name ?? "New transfer";
-}
-
-async function unhide(key: string) {
-  await api.unhideTitle(key);
-  await library.refresh();
 }
