@@ -21,7 +21,7 @@ use parse::{Kind, Quality};
 
 const VERSION: u32 = 1;
 
-#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct State {
     #[serde(default)]
     pub version: u32,
@@ -31,6 +31,27 @@ pub struct State {
     /// `<info hash>/<path inside the torrent>` of hidden files.
     #[serde(default)]
     pub hidden: BTreeSet<String>,
+    /// Title keys the user hid: keeps a show hidden when a new episode
+    /// arrives. The per-file entries above survive a parser change that
+    /// renames the key.
+    #[serde(default)]
+    pub hidden_keys: BTreeSet<String>,
+}
+
+/// Hide or unhide title `key` (its current files and the key itself).
+pub fn set_hidden(state: &mut State, key: &str, file_ids: &[String], hide: bool) {
+    for id in file_ids {
+        if hide {
+            state.hidden.insert(id.clone());
+        } else {
+            state.hidden.remove(id);
+        }
+    }
+    if hide {
+        state.hidden_keys.insert(key.to_string());
+    } else {
+        state.hidden_keys.remove(key);
+    }
 }
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -151,8 +172,19 @@ pub fn note_first_seen(state: &mut State, hashes: &[&str], now: u64) -> bool {
 }
 
 /// Forget transfers that are gone (deleted from stash); true when changed.
+/// Skipped when the listing looks partial (empty, or missing more than
+/// half of what is known), so a startup race can't erase the state.
 pub fn prune(state: &mut State, hashes: &[&str]) -> bool {
     let live: BTreeSet<&str> = hashes.iter().copied().collect();
+    let known = state.first_seen.len();
+    let missing = state
+        .first_seen
+        .keys()
+        .filter(|h| !live.contains(h.as_str()))
+        .count();
+    if live.is_empty() || (known > 2 && missing * 2 > known) {
+        return false;
+    }
     let before = (state.first_seen.len(), state.hidden.len());
     state.first_seen.retain(|h, _| live.contains(h.as_str()));
     state
@@ -244,7 +276,7 @@ pub fn build(transfers: &[TransferIn], state: &State) -> Library {
                     b.fid,
                 ))
             });
-            let hidden = acc.files.iter().all(|(_, h)| *h);
+            let hidden = acc.files.iter().all(|(_, h)| *h) || state.hidden_keys.contains(&key);
             Title {
                 key,
                 kind: acc.kind,
@@ -366,8 +398,50 @@ mod tests {
         assert!(prune(&mut state, &["aa", "bb", "cc"]));
         assert!(!state.first_seen.contains_key("gone"));
         assert!(!state.hidden.is_empty());
+        // Removing one of two is fine; an empty or mostly-missing listing
+        // is treated as partial and ignored.
+        assert!(!prune(&mut state, &[]));
         assert!(prune(&mut state, &["aa"]));
         assert!(state.hidden.is_empty());
+        for h in ["x1", "x2", "x3", "x4"] {
+            state.first_seen.insert(h.into(), 1);
+        }
+        assert!(!prune(&mut state, &["aa", "x1"]));
+        assert_eq!(state.first_seen.len(), 4);
+    }
+
+    #[test]
+    fn a_hidden_show_stays_hidden_when_episodes_arrive() {
+        let mut ts = sample();
+        let mut state = State::default();
+        let ids = title_file_ids(&ts, "show-friends");
+        set_hidden(&mut state, "show-friends", &ids, true);
+        if let Some(files) = ts[1].files.as_mut() {
+            files.push(file(3, "Friends.S01/Friends.S01E03.mkv"));
+        }
+        let lib = build(&ts, &state);
+        assert!(
+            lib.titles
+                .iter()
+                .find(|t| t.key == "show-friends")
+                .unwrap()
+                .hidden
+        );
+        set_hidden(
+            &mut state,
+            "show-friends",
+            &title_file_ids(&ts, "show-friends"),
+            false,
+        );
+        let lib = build(&ts, &state);
+        assert!(
+            !lib.titles
+                .iter()
+                .find(|t| t.key == "show-friends")
+                .unwrap()
+                .hidden
+        );
+        assert!(state.hidden.is_empty() && state.hidden_keys.is_empty());
     }
 
     #[test]

@@ -204,3 +204,22 @@ grouping per file with packs. Web: `nextInGrid` table, Back restores the
 poster, delete last file lands on next poster, signature refetch with fake
 timers, posters don't re-render on an unchanged poll, search in place,
 `parseLibrary` rejects bad shapes, pending card, filters.
+
+## After PR A review (rust-expert)
+
+- Fixed: sample/trailer only after the title or as the last word; `S01 E05`
+  split markers; bare `E05` / `Ep 05` / `Episode 5` (no season); `(US)` /
+  `(UK)` country codes stay in the title and a later `(2005)` is the year;
+  slug folds accents (NFC and NFD), drops apostrophes and acronym dots, is
+  capped at 120 bytes; long multi-episode ranges keep both ends.
+- Library leaves out deletions recorded in seeding state (not only
+  librqbit's `included`).
+- Hiding stores the title key too (`hidden_keys`), so a hidden show stays
+  hidden when a new episode arrives; per-file entries remain as fallback.
+- `prune` skips partial listings (empty, or more than half missing).
+- `library.json` saves run in `spawn_blocking` on a snapshot.
+- Handler-level test against a real offline session.
+- Deferred: `.srt` attached to its video (subtitles item);
+  `GET /api/library/{key}` (the client uses the list; part B adds detail
+  with TMDB data); same-show year split (`Show (2010)` vs `Show`) waits for
+  part B's merge by TMDB id. `Part.N` stays in titles (Kill Bill Vol 1 / 2).

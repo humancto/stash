@@ -231,13 +231,22 @@ fn current_year() -> u16 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    // Close enough for a plausibility bound.
+    // Close enough for a plausibility bound (can be a day off at New Year).
     (1970 + secs / 31_556_952) as u16
 }
 
 fn as_year(t: &str) -> Option<u16> {
     let y: u16 = t.parse().ok().filter(|_| t.len() == 4)?;
     (1900..=current_year() + 1).contains(&y).then_some(y)
+}
+
+/// `E01-60`: every episode up to 50 apart, else just the two ends.
+fn push_range(eps: &mut Vec<u32>, last: u32, n: u32) {
+    if n > last && n - last <= 50 {
+        eps.extend(last + 1..=n);
+    } else if n > last {
+        eps.push(n);
+    }
 }
 
 /// `S01E02`, `S01E02E03`, `S01E02-E03`, `S01E02-03`, `S04E28v2`, `S01`,
@@ -279,13 +288,9 @@ fn season_episode(t: &str) -> Option<(u32, Vec<u32>)> {
         let n: u32 = t[d..j].parse().ok()?;
         // E01-03 is a range.
         if let (Some(&last), false) = (eps.last(), has_e) {
-            if n > last && n - last <= 50 {
-                eps.extend(last + 1..=n);
-            }
+            push_range(&mut eps, last, n);
         } else if let (Some(&last), true) = (eps.last(), b.get(i) == Some(&b'-')) {
-            if n > last && n - last <= 50 {
-                eps.extend(last + 1..=n);
-            }
+            push_range(&mut eps, last, n);
         } else {
             eps.push(n);
         }
@@ -297,6 +302,16 @@ fn season_episode(t: &str) -> Option<(u32, Vec<u32>)> {
         || ((rest.starts_with('v') || rest.starts_with('V'))
             && rest[1..].chars().all(|c| c.is_ascii_digit()));
     rest_ok.then_some((season, eps))
+}
+
+/// `E05`, `e12v2`, `Ep05`: an episode number without a season.
+fn bare_episode(t: &str) -> Option<u32> {
+    let l = t.to_ascii_lowercase();
+    let rest = l.strip_prefix("ep").or_else(|| l.strip_prefix('e'))?;
+    if rest.is_empty() || !rest.as_bytes()[0].is_ascii_digit() || rest.len() > 6 {
+        return None;
+    }
+    number(rest)
 }
 
 /// `1x02` (not `1920x1080`, `x264`).
@@ -435,7 +450,6 @@ fn is_tag(l: &str) -> bool {
                 | "dubbed"
                 | "org"
                 | "multisub"
-                | "sample"
         )
         || l.ends_with("gb")
             && l[..l.len() - 2]
@@ -518,6 +532,11 @@ fn external_id(name: &str) -> Option<ExternalId> {
     None
 }
 
+/// `(US)`, `(UK)`, `[AU]`: part of a show's name, not a tag.
+fn country_code(t: &str) -> bool {
+    (2..=3).contains(&t.len()) && t.chars().all(|c| c.is_ascii_uppercase())
+}
+
 /// What made the title end.
 enum Marker {
     Episode {
@@ -532,12 +551,40 @@ fn find_marker(toks: &[Tok]) -> Option<(usize, Marker)> {
         if t.wrapped {
             continue;
         }
-        if let Some((s, e)) = season_episode(&t.text) {
+        if let Some((s, mut e)) = season_episode(&t.text) {
+            // "S01 E05": season and episode as two tokens.
+            if e.is_empty()
+                && let Some(n) = toks
+                    .get(i + 1)
+                    .filter(|n| !n.wrapped)
+                    .and_then(|n| bare_episode(&n.text))
+            {
+                e.push(n);
+            }
             return Some((
                 i,
                 Marker::Episode {
                     season: Some(s),
                     episodes: e,
+                },
+            ));
+        }
+        // "E05", "Ep 05", "Ep.1234", "Episode 5": an episode with no season.
+        let ep = bare_episode(&t.text).or_else(|| {
+            matches!(lower(&t.text).as_str(), "ep" | "episode")
+                .then(|| {
+                    toks.get(i + 1)
+                        .filter(|n| !n.wrapped)
+                        .and_then(|n| number(&n.text))
+                })
+                .flatten()
+        });
+        if let Some(n) = ep {
+            return Some((
+                i,
+                Marker::Episode {
+                    season: None,
+                    episodes: vec![n],
                 },
             ));
         }
@@ -659,7 +706,8 @@ pub fn parse_name(name: &str) -> Parsed {
         .position(|(i, t)| {
             // Any bracket block after the start, except a year, ends the
             // title (it holds tags or a group); so does a bare release tag.
-            (i > 0 && t.wrapped && as_year(&t.text).is_none()) || (!t.wrapped && is_tag(&lowers[i]))
+            (i > 0 && t.wrapped && as_year(&t.text).is_none() && !country_code(&t.text))
+                || (!t.wrapped && is_tag(&lowers[i]))
         })
         .unwrap_or(toks.len());
     let marker_at = marker.as_ref().map_or(toks.len(), |(i, _)| *i);
@@ -683,9 +731,9 @@ pub fn parse_name(name: &str) -> Parsed {
             year = as_year(&head[i].text);
             title_end = i;
         }
-    } else if matches!(marker, Some((_, Marker::Date(_)))) {
-        // The date's year is not the show's.
     }
+    // Episodes keep bare years in the title ("Space 1999"); a date's year
+    // is never the show's.
     let title_toks: Vec<Tok> = head[..title_end]
         .iter()
         .filter(|t| !(t.wrapped && as_year(&t.text).is_some()))
@@ -698,7 +746,13 @@ pub fn parse_name(name: &str) -> Parsed {
         .collect();
     let title = join_title(&title_toks);
 
-    let sample = lowers.iter().any(|l| l == "sample" || l == "trailer");
+    // "sample"/"trailer" only after the title, or as the last word, so
+    // "Trailer Park Boys" and "The Sample (2019)" stay titles.
+    let last = lowers.len().saturating_sub(1);
+    let sample = lowers
+        .iter()
+        .enumerate()
+        .any(|(i, l)| (l == "sample" || l == "trailer") && (i >= title_end || i == last));
     let (kind, season, episodes, date) = match marker {
         Some((_, Marker::Episode { season, episodes })) => (Kind::Episode, season, episodes, None),
         Some((_, Marker::Date(d))) => (Kind::Episode, None, Vec::new(), Some(d)),
@@ -828,13 +882,49 @@ pub fn fnv1a(s: &str) -> u64 {
     h
 }
 
+/// Fold common Latin letters with accents to ASCII ("Amélie" → "Amelie").
+fn fold(c: char) -> Option<char> {
+    Some(match c {
+        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' => 'a',
+        'ç' | 'č' | 'ć' => 'c',
+        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ę' => 'e',
+        'ì' | 'í' | 'î' | 'ï' | 'ī' => 'i',
+        'ñ' | 'ń' => 'n',
+        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' => 'o',
+        'ù' | 'ú' | 'û' | 'ü' | 'ū' => 'u',
+        'ý' | 'ÿ' => 'y',
+        'š' | 'ś' | 'ß' => 's',
+        'ž' | 'ź' | 'ż' => 'z',
+        'ł' => 'l',
+        _ => return None,
+    })
+}
+
+const SLUG_MAX: usize = 120;
+
 fn slug(title: &str) -> String {
     let mut out = String::new();
-    for c in title.chars() {
+    let chars: Vec<char> = title.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        let lc = c.to_lowercase().next().unwrap_or(c);
         if c.is_ascii_alphanumeric() {
             out.push(c.to_ascii_lowercase());
+        } else if let Some(f) = fold(lc) {
+            out.push(f);
+        } else if ('\u{300}'..='\u{36f}').contains(&c) || c == '\'' || c == '\u{2019}' {
+            // Combining accents (NFD) and apostrophes vanish: "Ocean's" = "Oceans".
+        } else if c == '.'
+            && i > 0
+            && chars.get(i + 1).is_some_and(|n| n.is_alphabetic())
+            && chars[i - 1].is_alphabetic()
+            && (i < 2 || !chars[i - 2].is_alphanumeric())
+        {
+            // An acronym's dot ("K.G.F" = "KGF").
         } else if !out.ends_with('-') && !out.is_empty() {
             out.push('-');
+        }
+        if out.len() >= SLUG_MAX {
+            break;
         }
     }
     while out.ends_with('-') {
@@ -1076,6 +1166,23 @@ mod tests {
                 "Breaking.Bad.S01-S05.1080p/Season 4/07.mkv",
                 ep("Breaking Bad", Some(4), &[7]),
             ),
+            ("Show.Name.S01.E05.mkv", ep("Show Name", Some(1), &[5])),
+            (
+                "Show Name S01 E05 1080p.mkv",
+                ep("Show Name", Some(1), &[5]),
+            ),
+            ("Show.Name.E05.mkv", ep("Show Name", None, &[5])),
+            ("Show Name Ep 05.mkv", ep("Show Name", None, &[5])),
+            (
+                "Crime.Patrol.Ep.1234.mkv",
+                ep("Crime Patrol", None, &[1234]),
+            ),
+            ("Show Name - Episode 5.mkv", ep("Show Name", None, &[5])),
+            (
+                "The Office (US) S01E01.mkv",
+                ep("The Office US", Some(1), &[1]),
+            ),
+            ("Show.S01E01-E60.mkv", ep("Show", Some(1), &[1, 60])),
             ("Sherlock.S00E01.mkv", ep("Sherlock", Some(0), &[1])),
             (
                 "MasterChef.S2024E01.mkv",
@@ -1114,6 +1221,16 @@ mod tests {
             let comps: Vec<String> = path.split('/').map(str::to_string).collect();
             assert_eq!(parse_file(&comps).kind, Kind::Other, "{path}");
         }
+        // Titles that contain the words
+        assert_eq!(
+            parse_name("Trailer.Park.Boys.S01E01.mkv").kind,
+            Kind::Episode
+        );
+        let s = parse_name("The.Sample.2019.1080p.mkv");
+        assert_eq!(
+            (s.kind, s.title.as_str(), s.year),
+            (Kind::Film, "The Sample", Some(2019))
+        );
         // Not episodes
         assert_eq!(cross_episode("1920x1080"), None);
         assert_eq!(cross_episode("x264"), None);
@@ -1167,6 +1284,34 @@ mod tests {
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         );
         assert_eq!(k("Movie.Sample.mkv"), None);
+        assert_eq!(
+            k("The Office (US) S01E01.mkv").as_deref(),
+            Some("show-the-office-us")
+        );
+        assert_ne!(
+            k("The Office (US) S01E01.mkv"),
+            k("The Office (UK) S01E01.mkv")
+        );
+        assert_eq!(
+            k("Oceans Eleven (2001).mkv"),
+            k("Ocean's Eleven (2001).mkv")
+        );
+        assert_eq!(k("K.G.F (2018).mkv"), k("KGF (2018).mkv"));
+        assert_eq!(k("Amélie (2001).mkv").as_deref(), Some("film-amelie-2001"));
+        assert_eq!(
+            k("Ame\u{301}lie (2001).mkv").as_deref(),
+            Some("film-amelie-2001")
+        );
+        let long = k(&format!("{} (2001).mkv", "Word ".repeat(80))).unwrap();
+        assert!(long.len() <= 200, "{}", long.len());
+        // A year on the show's folder disambiguates the show.
+        let x = parse_file(&["Extras (2005)".into(), "Season 1".into(), "01.mkv".into()]);
+        assert_eq!(
+            (x.title.as_str(), x.year, x.season, x.episodes.as_slice()),
+            ("Extras", Some(2005), Some(1), &[1][..])
+        );
+        let y = parse_name("The Office (US) (2005) S01E01.mkv");
+        assert_eq!(y.year, Some(2005));
         assert_eq!(fnv1a("a"), 0xaf63_dc4c_8601_ec8c);
     }
 }
