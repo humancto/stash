@@ -162,16 +162,38 @@ pub fn parse_link(raw: &str) -> Result<AddSource, AddError> {
     Err(AddError::BadLink)
 }
 
-/// Download a `.torrent` over the normal connection, like the browser
-/// would: 30 s, at most 5 redirects, at most 16 MB. Local hosts are allowed
-/// (indexers such as Jackett run on 127.0.0.1); the Origin guard keeps
-/// other web pages from driving this. Errors never include the URL (it may
-/// carry a passkey).
-pub async fn download(url: &str) -> Result<Bytes, AddError> {
-    let client = reqwest::Client::builder()
+/// Is this URL's host this machine? Loopback traffic never leaves it, so it
+/// needs no tunnel (and can't go through one).
+fn is_loopback(url: &str) -> bool {
+    let Ok(u) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    let Some(host) = u.host_str() else {
+        return false;
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// Download a `.torrent`: 30 s, at most 5 redirects, at most 16 MB. When
+/// torrent traffic is bound to the VPN (`via`), so is this download, except
+/// for loopback hosts (local indexers such as Jackett). The caller refuses
+/// it when the kill switch blocks. The Origin guard keeps other web pages
+/// from driving this. Errors never include the URL (it may carry a passkey).
+pub async fn download(url: &str, via: Option<&str>) -> Result<Bytes, AddError> {
+    let mut builder = reqwest::Client::builder()
+        .no_proxy()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::limited(5))
+        .redirect(reqwest::redirect::Policy::limited(5));
+    if let Some(iface) = via.filter(|_| !is_loopback(url)) {
+        builder = builder.interface(iface);
+    }
+    let client = builder
         .build()
         .map_err(|_| AddError::Download("could not set up the download".into()))?;
     let describe = |e: reqwest::Error| {
@@ -306,6 +328,15 @@ mod tests {
         assert_eq!(parse_add(t, b"<html>"), Err(AddError::NotATorrent));
         let big = vec![b'd'; TORRENT_MAX_BYTES + 1];
         assert_eq!(parse_add(t, &big), Err(AddError::TooLarge));
+    }
+
+    #[test]
+    fn loopback_hosts() {
+        assert!(is_loopback("http://127.0.0.1:9117/x.torrent"));
+        assert!(is_loopback("http://LOCALHOST/x.torrent"));
+        assert!(is_loopback("http://[::1]/x.torrent"));
+        assert!(!is_loopback("https://example.com/x.torrent"));
+        assert!(!is_loopback("http://192.168.1.2/x.torrent"));
     }
 
     #[test]

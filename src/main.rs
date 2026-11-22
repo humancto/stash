@@ -487,7 +487,16 @@ async fn add(
     // Parse (and download) before taking the write guard: bad input is a
     // 400 whatever the VPN state, and a slow download holds nothing.
     let source = match adding::parse_add(content_type, &body)? {
-        adding::AddSource::Download(url) => adding::torrent_bytes(adding::download(&url).await?)?,
+        adding::AddSource::Download(url) => {
+            // The download reaches the internet too: never while the kill
+            // switch blocks, and through the tunnel when bound to it.
+            let via = match privacy.binding() {
+                Binding::Blocked => return Err(AppError::NoVpn),
+                Binding::Bound { name, .. } => Some(name),
+                Binding::Unbound => None,
+            };
+            adding::torrent_bytes(adding::download(&url, via.as_deref()).await?)?
+        }
         other => other,
     };
     let torrent = match source {
