@@ -534,7 +534,7 @@ fn external_id(name: &str) -> Option<ExternalId> {
 
 /// `(US)`, `(UK)`, `[AU]`: part of a show's name, not a tag.
 fn country_code(t: &str) -> bool {
-    (2..=3).contains(&t.len()) && t.chars().all(|c| c.is_ascii_uppercase())
+    matches!(t, "US" | "UK" | "AU" | "NZ" | "CA" | "IN" | "IE")
 }
 
 /// What made the title end.
@@ -570,16 +570,29 @@ fn find_marker(toks: &[Tok]) -> Option<(usize, Marker)> {
             ));
         }
         // "E05", "Ep 05", "Ep.1234", "Episode 5": an episode with no season.
-        let ep = bare_episode(&t.text).or_else(|| {
-            matches!(lower(&t.text).as_str(), "ep" | "episode")
-                .then(|| {
-                    toks.get(i + 1)
-                        .filter(|n| !n.wrapped)
-                        .and_then(|n| number(&n.text))
-                })
-                .flatten()
-        });
-        if let Some(n) = ep {
+        // Not when the number is a year ("The Last Episode 2023"), nor when
+        // a year follows before the tags: "Star Wars Episode 4 A New Hope
+        // 1977" is a film. Real seasonless episodes rarely carry a year.
+        let (ep, after) = match bare_episode(&t.text) {
+            Some(n) => (Some((n, t.text.as_str())), i + 1),
+            None if matches!(lower(&t.text).as_str(), "ep" | "episode") => (
+                toks.get(i + 1)
+                    .filter(|n| !n.wrapped)
+                    .and_then(|n| number(&n.text).map(|v| (v, n.text.as_str()))),
+                i + 2,
+            ),
+            None => (None, i + 1),
+        };
+        let year_follows = || {
+            toks[after.min(toks.len())..]
+                .iter()
+                .take_while(|t| !is_tag(&lower(&t.text)))
+                .any(|t| as_year(&t.text).is_some())
+        };
+        if let Some((n, raw)) = ep
+            && as_year(raw.trim_start_matches(['E', 'e', 'P', 'p'])).is_none()
+            && !year_follows()
+        {
             return Some((
                 i,
                 Marker::Episode {
@@ -883,19 +896,23 @@ pub fn fnv1a(s: &str) -> u64 {
 }
 
 /// Fold common Latin letters with accents to ASCII ("Amélie" → "Amelie").
-fn fold(c: char) -> Option<char> {
+fn fold(c: char) -> Option<&'static str> {
     Some(match c {
-        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' => 'a',
-        'ç' | 'č' | 'ć' => 'c',
-        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ę' => 'e',
-        'ì' | 'í' | 'î' | 'ï' | 'ī' => 'i',
-        'ñ' | 'ń' => 'n',
-        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' => 'o',
-        'ù' | 'ú' | 'û' | 'ü' | 'ū' => 'u',
-        'ý' | 'ÿ' => 'y',
-        'š' | 'ś' | 'ß' => 's',
-        'ž' | 'ź' | 'ż' => 'z',
-        'ł' => 'l',
+        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' => "a",
+        'æ' => "ae",
+        'ç' | 'č' | 'ć' => "c",
+        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ę' => "e",
+        'ì' | 'í' | 'î' | 'ï' | 'ī' => "i",
+        'ñ' | 'ń' => "n",
+        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' => "o",
+        'œ' => "oe",
+        'ù' | 'ú' | 'û' | 'ü' | 'ū' => "u",
+        'ý' | 'ÿ' => "y",
+        'š' | 'ś' => "s",
+        'ß' => "ss",
+        'ž' | 'ź' | 'ż' => "z",
+        'ł' => "l",
+        'þ' => "th",
         _ => return None,
     })
 }
@@ -910,7 +927,7 @@ fn slug(title: &str) -> String {
         if c.is_ascii_alphanumeric() {
             out.push(c.to_ascii_lowercase());
         } else if let Some(f) = fold(lc) {
-            out.push(f);
+            out.push_str(f);
         } else if ('\u{300}'..='\u{36f}').contains(&c) || c == '\'' || c == '\u{2019}' {
             // Combining accents (NFD) and apostrophes vanish: "Ocean's" = "Oceans".
         } else if c == '.'
@@ -1221,6 +1238,32 @@ mod tests {
             let comps: Vec<String> = path.split('/').map(str::to_string).collect();
             assert_eq!(parse_file(&comps).kind, Kind::Other, "{path}");
         }
+        // "Episode" in film titles
+        for (name, title, year) in [
+            (
+                "Star.Wars.Episode.4.A.New.Hope.1977.1080p.mkv",
+                "Star Wars Episode 4 A New Hope",
+                1977,
+            ),
+            (
+                "Star Wars Episode 1 The Phantom Menace (1999).mkv",
+                "Star Wars Episode 1 The Phantom Menace",
+                1999,
+            ),
+            ("The.Last.Episode.2023.mkv", "The Last Episode", 2023),
+        ] {
+            let p = parse_name(name);
+            assert_eq!(
+                (p.kind, p.title.as_str(), p.year),
+                (Kind::Film, title, Some(year)),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            title_key(&parse_name("Æon Flux (2005).mkv")).as_deref(),
+            Some("film-aeon-flux-2005")
+        );
+        assert_eq!(parse_name("Dark (DE) S01E01.mkv").title, "Dark");
         // Titles that contain the words
         assert_eq!(
             parse_name("Trailer.Park.Boys.S01E01.mkv").kind,
